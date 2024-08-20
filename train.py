@@ -10,6 +10,59 @@ import math
 import os
 import matplotlib.pyplot as plt
 from IPython.display import clear_output, display
+import torchvision.models as models
+import torchvision.transforms as transforms
+
+
+
+class PerceptualLoss(nn.Module):
+    def __init__(self):
+        super(PerceptualLoss, self).__init__()
+        vgg = models.vgg16(pretrained=True).features.eval()
+        self.vgg_layers = nn.ModuleList(vgg)
+        self.layer_name_mapping = {
+            '3': "relu1_2",
+            '8': "relu2_2",
+            '15': "relu3_3",
+            '22': "relu4_3"
+        }
+        
+    def forward(self, x):
+        output = {}
+        for name, module in self.vgg_layers._modules.items():
+            x = module(x)
+            if name in self.layer_name_mapping:
+                output[self.layer_name_mapping[name]] = x
+        return output
+
+class CombinedLoss(nn.Module):
+    def __init__(self, lambda_mse=1.0, lambda_perceptual=0.1):
+        super(CombinedLoss, self).__init__()
+        self.mse_loss = nn.MSELoss()
+        self.perceptual_loss = PerceptualLoss()
+        self.lambda_mse = lambda_mse
+        self.lambda_perceptual = lambda_perceptual
+        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+    def forward(self, output, target):
+        # MSE Loss
+        mse_loss = self.mse_loss(output, target)
+        
+        # Perceptual Loss
+        output_normalized = self.normalize(output.permute(0, 3, 1, 2))  # Change from NHWC to NCHW and normalize
+        target_normalized = self.normalize(target.permute(0, 3, 1, 2))  # Change from NHWC to NCHW and normalize
+        
+        output_features = self.perceptual_loss(output_normalized)
+        target_features = self.perceptual_loss(target_normalized)
+        
+        perceptual_loss = 0
+        for key in output_features.keys():
+            perceptual_loss += self.mse_loss(output_features[key], target_features[key])
+        
+        # Combined Loss
+        total_loss = self.lambda_mse * mse_loss + self.lambda_perceptual * perceptual_loss
+        
+        return total_loss, mse_loss, perceptual_loss
 
 class PatchRelightingDataset(Dataset):
     def __init__(self, distances, cosines, albedo, normals, targets):
@@ -177,11 +230,49 @@ class RelightingModel(nn.Module):
             'final': out
         }
         return out, intermediates
+    
+def visualize_output(model, val_loader, device):
+    # Get a random batch from the validation set
+    batch = next(iter(val_loader))
+    
+    # Select a random sample from the batch
+    idx = random.randint(0, batch['distances'].shape[0] - 1)
+    
+    distances = batch['distances'][idx:idx+1].to(device)
+    cosines = batch['cosines'][idx:idx+1].to(device)
+    albedo = batch['albedo'][idx:idx+1].to(device)
+    normals = batch['normals'][idx:idx+1].to(device)
+    target = batch['target'][idx:idx+1].to(device)
+
+    model.eval()
+    with torch.no_grad():
+        output, _ = model(distances, cosines, albedo, normals)
+
+    # Convert tensors to numpy arrays for plotting
+    output = output.cpu().numpy()[0]
+    target = target.cpu().numpy()[0]
+
+    # Create a figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Plot the ground truth
+    ax1.imshow(target)
+    ax1.set_title('Ground Truth')
+    ax1.axis('off')
+
+    # Plot the model output
+    ax2.imshow(output)
+    ax2.set_title('Model Output')
+    ax2.axis('off')
+
+    plt.tight_layout()
+    return fig
+
 
 def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path='.'):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
-    criterion = nn.MSELoss()
+    criterion = CombinedLoss().to(device)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
@@ -207,7 +298,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
 
             optimizer.zero_grad()
             outputs, _ = model(distances, cosines, albedo, normals)
-            loss = criterion(outputs, targets)
+            loss, mse, perceptual = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -224,7 +315,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
                 targets = batch['target'].to(device)
 
                 outputs, _ = model(distances, cosines, albedo, normals)
-                loss = criterion(outputs, targets)
+                loss, _, _ = criterion(outputs, targets)
                 val_loss += loss.item()
 
         train_loss /= len(train_loader)
@@ -261,6 +352,11 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
             save_path = os.path.join(model_save_path, f'relighting_model_epoch_{epoch+1}.pth')
             torch.save(model.state_dict(), save_path)
             output_text.append(f"Model saved at epoch {epoch+1}")
+
+            # Visualize a random validation sample
+            fig_viz = visualize_output(model, val_loader, device)
+            display(fig_viz)
+            plt.close(fig_viz)
 
     return model
 
