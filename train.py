@@ -8,9 +8,11 @@ from utils import params
 import random
 import math
 import os
+import matplotlib.pyplot as plt
+from IPython.display import clear_output, display
 
 class PatchRelightingDataset(Dataset):
-    def __init__(self, distances, cosines, albedo, normals, targets, same_illumination=False):
+    def __init__(self, distances, cosines, albedo, normals, targets):
         self.distances = torch.FloatTensor(distances)
         self.cosines = torch.FloatTensor(cosines)
         self.albedo = torch.ByteTensor(albedo)
@@ -18,30 +20,32 @@ class PatchRelightingDataset(Dataset):
         self.targets = torch.ByteTensor(targets)
         self.patch_size = params.RTI_NET_PATCH_SIZE
         self.patches_per_image = params.RTI_NET_PATCHES_PER_IMAGE
-        self.same_illumination = same_illumination
         
         self.patches = self._create_patches()
 
     def _create_patches(self):
         patches = []
-        if self.same_illumination:
-            H, W = self.distances.shape
-            K = self.albedo.shape[0]
-            N = self.targets.shape[1]
-        else:
-            K, N, H, W = self.distances.shape
+        K, N, H, W = self.distances.shape
+        grid_size = math.isqrt(self.patches_per_image)  # Square root of patches_per_image
+        cell_h, cell_w = H // grid_size, W // grid_size
         
         for k in range(K):
-            # Generate patch locations for this acquisition
-            acquisition_patches = []
-            for _ in range(self.patches_per_image):
-                h = random.randint(0, H - self.patch_size)
-                w = random.randint(0, W - self.patch_size)
-                acquisition_patches.append((h, w))
-            
-            # Use the same patches for all images in this acquisition
             for n in range(N):
-                for h, w in acquisition_patches:
+                for _ in range(self.patches_per_image):
+                    # Randomly select a grid cell
+                    i = random.randint(0, grid_size - 1)
+                    j = random.randint(0, grid_size - 1)
+                    
+                    # Calculate the range for this grid cell
+                    h_start = i * cell_h
+                    h_end = min((i + 1) * cell_h, H) - self.patch_size
+                    w_start = j * cell_w
+                    w_end = min((j + 1) * cell_w, W) - self.patch_size
+                    
+                    # Randomly select a patch within this grid cell
+                    h = random.randint(h_start, max(h_start, h_end))
+                    w = random.randint(w_start, max(w_start, w_end))
+                    
                     patches.append((k, n, h, w))
         
         return patches
@@ -53,47 +57,34 @@ class PatchRelightingDataset(Dataset):
         k, n, i, j = self.patches[idx]
         patch_slice = slice(i, i + self.patch_size), slice(j, j + self.patch_size)
 
-        if self.same_illumination:
-            distances = self.distances[patch_slice]
-            cosines = self.cosines[patch_slice]
-        else:
-            distances = self.distances[k, n][patch_slice]
-            cosines = self.cosines[k, n][patch_slice]
-
-        albedo = self.albedo[k][patch_slice].float() / 255.0
-        normals = self.normals[k][patch_slice].float() / 255.0
-        target = self.targets[k, n][patch_slice].float() / 255.0
-
         return {
-            'distances': distances,
-            'cosines': cosines,
-            'albedo': albedo,
-            'normals': normals,
-            'target': target
+            'distances': self.distances[k, n][patch_slice],
+            'cosines': self.cosines[k, n][patch_slice],
+            'albedo': self.albedo[k][patch_slice].float() / 255.0,
+            'normals': self.normals[k][patch_slice].float(),
+            'target': self.targets[k, n][patch_slice].float() / 255.0
         }
 
 class ResidualBlock2D(nn.Module):
     def __init__(self, in_channels, out_channels, dilation=1):
         super(ResidualBlock2D, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=dilation, dilation=dilation)
-        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.in1 = nn.InstanceNorm2d(out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=dilation, dilation=dilation)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.in2 = nn.InstanceNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-            nn.BatchNorm2d(out_channels)
+            nn.InstanceNorm2d(out_channels)
         ) if in_channels != out_channels else None
-        self.dropout = nn.Dropout(0.2)
 
     def forward(self, x):
         identity = x
         out = self.conv1(x)
-        out = self.bn1(out)
+        out = self.in1(out)
         out = self.relu(out)
-        out = self.dropout(out)
         out = self.conv2(out)
-        out = self.bn2(out)
+        out = self.in2(out)
         if self.downsample is not None:
             identity = self.downsample(x)
         out += identity
@@ -191,10 +182,18 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
     best_val_loss = float('inf')
+
+    # For live plotting
+    train_losses = []
+    val_losses = []
+    epochs = []
+    
+    # For accumulating output
+    output_text = []
 
     for epoch in range(num_epochs):
         model.train()
@@ -231,97 +230,113 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
         
-        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-        
-        scheduler.step()
+        output_text.append(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
 
-        # Save the best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), os.path.join(model_save_path, 'best_model.pth'))
+        # Update plot data
+        epochs.append(epoch + 1)
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+
+        # Clear the previous output and create a new plot
+        clear_output(wait=True)
+        
+        # Display accumulated text output
+        print("\n".join(output_text))
+        
+        # Create and display the plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(epochs, train_losses, 'b-', label='Train Loss')
+        ax.plot(epochs, val_losses, 'r-', label='Validation Loss')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss')
+        ax.set_title('Training and Validation Loss')
+        ax.legend()
+        display(fig)
+        plt.close(fig)  # Close the figure to free up memory
+        
+        scheduler.step(val_loss)
 
         # Save model every N epochs
         if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
             save_path = os.path.join(model_save_path, f'relighting_model_epoch_{epoch+1}.pth')
             torch.save(model.state_dict(), save_path)
-            print(f"Model saved at epoch {epoch+1}")
+            output_text.append(f"Model saved at epoch {epoch+1}")
 
     return model
 
-def prepare_data(distances, cosines, albedo, normals, targets, same_illumination=False):
-    K = albedo.shape[0]
-    
-    train_indices, val_indices = train_test_split(
-        np.arange(K), 
-        test_size=0.2, 
-        random_state=42
-    )
+def prepare_data(distances, cosines, albedo, normals, targets):
+    # Splitting the data
+    K = distances.shape[0]
+    N = distances.shape[1]
+    train_distances = []
+    val_distances = []
+    train_cosines = []
+    val_cosines = []
+    train_targets = []   
+    val_targets = []
+
+    for i in range(K):
+        train_indices, val_indices = train_test_split(
+            np.arange(N), 
+            test_size=0.2, 
+            random_state=42
+        )
+        train_distances.append(distances[i, train_indices, :, :])
+        val_distances.append(distances[i, val_indices, :, :])
+        train_cosines.append(cosines[i, train_indices, :, :])
+        val_cosines.append(cosines[i, val_indices, :, :])
+        train_targets.append(targets[i, train_indices, :, :])
+        val_targets.append(targets[i, val_indices, :, :])
+
+    print("Train distances shape: ", np.array(train_distances).shape,
+          "Val distances shape: ", np.array(val_distances).shape,
+          "Train cosines shape: ", np.array(train_cosines).shape,
+          "Val cosines shape: ", np.array(val_cosines).shape,
+          "Train targets shape: ", np.array(train_targets).shape,
+          "Val targets shape: ", np.array(val_targets).shape)
 
     # Create datasets
     train_dataset = PatchRelightingDataset(
-        distances, cosines,
-        albedo[train_indices], normals[train_indices],
-        targets[train_indices],
-        same_illumination=same_illumination
+        train_distances, train_cosines,
+        albedo, normals,
+        train_targets
     )
     val_dataset = PatchRelightingDataset(
-        distances, cosines,
-        albedo[val_indices], normals[val_indices],
-        targets[val_indices],
-        same_illumination=same_illumination
+        val_distances, val_cosines,
+        albedo, normals,
+        val_targets
     )
 
     # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=14)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=14)
 
-    return train_loader, val_loader
+    return train_loader, val_loader, train_indices, val_indices
 
 def train(distances, cosines, albedo, normals, targets):
-    distances = np.transpose(distances)
-    cosines = np.transpose(cosines)
 
-    same_illumination = params.SAME_ILLUMINATION
-
-    model_save_path = os.path.join(os.path.dirname(__file__), 'saved_models')
-
-    if not os.path.exists(model_save_path):
-        os.makedirs(model_save_path)
+    distances = np.transpose(distances, (0,1,3,2))
+    cosines = np.transpose(cosines, (0,1,3,2))
 
     print("Input shapes - distances: ", distances.shape, "cosines: ", cosines.shape, 
           "albedo: ", albedo.shape, "normals: ", normals.shape, "targets: ", targets.shape)
+    
+    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models")
+    os.makedirs(model_save_path, exist_ok=True)
 
     # Prepare data
-    print("Preparing data...")
-    train_loader, val_loader = prepare_data(distances, cosines, albedo, normals, targets, same_illumination)
+    train_loader, val_loader, train_indices, val_indices = prepare_data(distances, cosines, albedo, normals, targets)
+
+    np.save(os.path.join(model_save_path, 'train_indices.npy'), train_indices)
+    np.save(os.path.join(model_save_path, 'val_indices.npy'), val_indices)
 
     # Initialize the model
-    print("Initializing model...")
     model = RelightingModel(height=params.RTI_NET_PATCH_SIZE, width=params.RTI_NET_PATCH_SIZE)
 
     # Train the model
-    print("Training model...")
     trained_model = train_model(model, train_loader, val_loader, num_epochs=params.RTI_NET_EPOCHS, model_save_path=model_save_path)
 
     # Save the final model
     torch.save(trained_model.state_dict(), os.path.join(model_save_path, 'relighting_model_final.pth'))
 
     print("Training completed and model saved.")
-
-# if __name__ == "__main__":
-#     # Example usage (replace with your actual data loading)
-#     K, N, H, W = 5, 10, 256, 256  # Adjust these values as needed
-#     same_illumination = True  # Set this according to your needs
-
-#     if same_illumination:
-#         distances = np.random.rand(H, W).astype(np.float32)  # Single distance matrix for all K and N
-#         cosines = np.random.rand(H, W).astype(np.float32)    # Single cosine matrix for all K and N
-#     else:
-#         distances = np.random.rand(K, N, H, W).astype(np.float32)
-#         cosines = np.random.rand(K, N, H, W).astype(np.float32)
-
-#     albedo = np.random.randint(0, 256, (K, H, W), dtype=np.uint8)
-#     normals = np.random.rand(K, H, W, 3).astype(np.float32)
-#     targets = np.random.randint(0, 256, (K, N, H, W, 3), dtype=np.uint8)
-
-#     train(distances, cosines, albedo, normals, targets)

@@ -54,6 +54,10 @@ class dataset:
         self.cosine_matrices = []
         self.images = []
 
+        self.rand_indices = []
+        for i in range(len(self.acqs)):
+            self.rand_indices.append(random.sample(range(len(self.acqs[i])), min(len(self.acqs[i]), params.MAX_NB_IMAGES_PER_ACQ)))
+
         self.lp_files, errors = ([path for folder in self.acqs for path in glob.glob(os.path.join(folder, "*.lp"))], [f"Error: No .lp file found in {folder}" for folder in self.acqs if not glob.glob(os.path.join(folder, "*.lp"))])
         print(errors)
 
@@ -77,11 +81,12 @@ class dataset:
     def load_images(self):
         for i in tqdm(range(len(self.acqs)), desc="Loading acquisitions", unit="acq"):
             acq_images = []
-            for img_path in tqdm(random.sample(self.image_paths[i], min(len(self.image_paths[i]), params.MAX_NB_IMAGES_PER_ACQ)),
-                                desc=f"Loading images for acq {i+1}/{len(self.acqs)}",
-                                leave=False, 
-                                unit="img",
-                                total=min(len(self.image_paths[i]), params.MAX_NB_IMAGES_PER_ACQ)):
+            for idx in tqdm(self.rand_indices[i],
+                            desc=f"Loading images for acq {i+1}/{len(self.acqs)}",
+                            leave=False, 
+                            unit="img",
+                            total=len(self.rand_indices)):
+                img_path = self.image_paths[i][idx]
                 img = cv2.imread(img_path)
                 acq_images.append(img)
             self.images.append(acq_images)
@@ -166,14 +171,18 @@ class dataset:
                                                 
     def load_distance_matrices(self):
         if not params.SAME_ILLUMINATION:
-            for acq in self.acqs:
-                self.distance_matrices.append(np.load(os.path.join(acq, "distance_matrices.npy")))
+            for idx, acq in enumerate(self.acqs):
+                distance_matrix = np.load(os.path.join(acq, "distance_matrices.npy"))
+                self.distance_matrices.append(distance_matrix[self.rand_indices[idx], :, :])                
         else:
-            self.distance_matrices = np.load(os.path.join(self.acqs[0], "distance_matrices.npy"))[0]
+            self.distance_matrices = np.load(os.path.join(self.acqs[0], "distance_matrices.npy"))[self.rand_indices]
+
+        self.distance_matrices = np.array(self.distance_matrices)
                                                     
     def load_cosine_matrices(self):
         if not params.SAME_ILLUMINATION:
-            for acq in self.acqs:
-                self.cosine_matrices.append(np.cos(np.load(os.path.join(acq, "angles_matrices.npy"))))
+            for idx, acq in enumerate(self.acqs):
+                cosine_matrix = np.load(os.path.join(acq, "angles_matrices.npy"))
+                self.cosine_matrices.append(cosine_matrix[self.rand_indices[idx], :, :])
         else:
-            self.cosine_matrices = np.cos(np.load(os.path.join(self.acqs[0], "angles_matrices.npy"))[0])
+            self.cosine_matrices = np.cos(np.load(os.path.join(self.acqs[0], "angles_matrices.npy")))[self.rand_indices]
