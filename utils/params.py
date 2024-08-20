@@ -1,5 +1,5 @@
-ACQ_PATHS = [r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_1\images\Face_A\rti"]
-            #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_2\images\Face_A\rti",
+ACQ_PATHS = [r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_1\images\Face_A\rti",
+             r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_2\images\Face_A\rti"]
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_3\images\Face_A\rti",
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_4\images\Face_A\rti",
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_5\images\Face_A\rti",

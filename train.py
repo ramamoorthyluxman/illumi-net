@@ -354,9 +354,9 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
             output_text.append(f"Model saved at epoch {epoch+1}")
 
             # Visualize a random validation sample
-            fig_viz = visualize_output(model, val_loader, device)
-            display(fig_viz)
-            plt.close(fig_viz)
+            # fig_viz = visualize_output(model, val_loader, device)
+            # display(fig_viz)
+            # plt.close(fig_viz)
 
     return model
 
