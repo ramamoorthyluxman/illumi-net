@@ -1,5 +1,5 @@
-ACQ_PATHS = [r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_1\images\Face_A\rti",
-             r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_2\images\Face_A\rti"]
+ACQ_PATHS = [r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_1\images\Face_A\rti"]
+            # r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_2\images\Face_A\rti"]
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_3\images\Face_A\rti",
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_4\images\Face_A\rti",
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_5\images\Face_A\rti",
@@ -79,7 +79,7 @@ PS_METHOD = "L2_SOLVER"    # Least-squares
 RTI_NET_MAX_NUMBER_OF_IMAGES = 105
 RTI_NET_EPOCHS = 1000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 10
-RTI_NET_PATCH_SIZE = 256
-RTI_NET_PATCHES_PER_IMAGE = 70
+RTI_NET_PATCH_SIZE = 64
+RTI_NET_PATCHES_PER_IMAGE = 42*28
 
 RTI_MODEL_PATH = r'D:\Acquisitions\Ram\illumi-net\saved_models\relighting_model_epoch_90.pth'
