@@ -390,16 +390,15 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         
-        # Create and show the loss plot
-        plt.figure(figsize=(10, 6))
-        plt.plot(epochs, train_losses, 'b-', label='Train Loss')
-        plt.plot(epochs, val_losses, 'r-', label='Validation Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Training and Validation Loss')
-        plt.legend()
-        plt.show()
-        plt.close()
+        # Create and display the loss plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(epochs, train_losses, 'b-', label='Train Loss')
+        ax.plot(epochs, val_losses, 'r-', label='Validation Loss')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss')
+        ax.set_title('Training and Validation Loss')
+        ax.legend()
+        plt.close(fig)
 
         # Save comparison plots every 5 epochs
         if (epoch + 1) % 5 == 0:
