@@ -79,32 +79,53 @@ class PatchRelightingDataset(Dataset):
         patch_height, patch_width = params.RTI_NET_PATCH_SIZE
         desired_patches = params.RTI_MAX_NUMBER_PATCHES
         _, _, image_height, image_width = self.distances.shape
-        # Ensure patch sizes are not larger than image dimensions
-        patch_height = min(patch_height, image_height)
+        # Case 4: Patch size greater than image size
         patch_width = min(patch_width, image_width)
-        
-        # Adjust patch sizes to ensure they divide image dimensions perfectly
-        while image_height % patch_height != 0:
-            patch_height -= 1
-        while image_width % patch_width != 0:
-            patch_width -= 1
-        
-        # Calculate maximum possible patches
-        max_patches_y = image_height // patch_height
-        max_patches_x = image_width // patch_width
-        max_patches = max_patches_y * max_patches_x
-        
-        # Adjust desired patches if it exceeds maximum possible
-        adjusted_patches = min(desired_patches, max_patches)
-        
-        # Calculate actual number of patches in each dimension
-        patches_y = min(adjusted_patches, max_patches_y)
-        patches_x = min(adjusted_patches // patches_y, max_patches_x)
-        
-        # Recalculate total patches
-        total_patches = patches_y * patches_x
-        
-        return [patch_height, patch_width], total_patches
+        patch_height = min(patch_height, image_height)
+
+        # Calculate initial number of patches
+        patches_x = max(1, image_width // patch_width)
+        patches_y = max(1, image_height // patch_height)
+        total_patches = patches_x * patches_y
+
+        # Case 3: Desired patches is 0 (auto-calculate)
+        if desired_patches == 0:
+            new_width = patch_width
+            new_height = patch_height
+            for i in range(patch_width, 0, -1):
+                if image_width % i == 0:
+                    new_width = i
+                    break
+            for i in range(patch_height, 0, -1):
+                if image_height % i == 0:
+                    new_height = i
+                    break
+            return [new_height, new_width], (image_width // new_width) * (image_height // new_height)
+
+        # Case 1 & 2: Adjust patch size to fit desired patches or as close as possible
+        if desired_patches <= total_patches:
+            target_patches = max(1, min(desired_patches, total_patches))
+        else:
+            target_patches = desired_patches
+
+        # Find the best divisors
+        best_patches_x = 1
+        best_patches_y = 1
+        for i in range(1, target_patches + 1):
+            if image_width % i == 0 and image_height % (target_patches // i) == 0:
+                best_patches_x = i
+                best_patches_y = target_patches // i
+                if best_patches_x * best_patches_y == target_patches:
+                    break
+
+        new_width = image_width // best_patches_x
+        new_height = image_height // best_patches_y
+
+        # Ensure new patch sizes are not smaller than original
+        if new_width < patch_width or new_height < patch_height:
+            return patch_height, patch_width, total_patches
+
+        return [new_height, new_width], best_patches_x * best_patches_y
 
     def _create_patches(self):
         patches = []
@@ -300,11 +321,13 @@ def visualize_output(model, val_loader, device):
 
 def visualize_comparisons(model, val_loader, device, num_samples=10):
     model.eval()
-    originals = []
-    reconstructed = []
+    fig, axes = plt.subplots(num_samples, 2, figsize=(10, 5*num_samples))
     
     with torch.no_grad():
-        for batch in val_loader:
+        for i, batch in enumerate(val_loader):
+            if i >= num_samples:
+                break
+            
             distances = batch['distances'].to(device)
             cosines = batch['cosines'].to(device)
             albedo = batch['albedo'].to(device)
@@ -313,18 +336,22 @@ def visualize_comparisons(model, val_loader, device, num_samples=10):
 
             outputs, _ = model(distances, cosines, albedo, normals)
 
-            # Convert tensors to numpy arrays
-            originals.extend(targets.cpu().numpy())
-            reconstructed.extend(outputs.cpu().numpy())
+            # Convert tensors to numpy arrays for plotting
+            original = targets[0].cpu().numpy()
+            reconstructed = outputs[0].cpu().numpy()
 
-            if len(originals) >= num_samples:
-                break
+            # Plot original image
+            axes[i, 0].imshow(original)
+            axes[i, 0].set_title('Original')
+            axes[i, 0].axis('off')
 
-    # Trim to the desired number of samples
-    originals = originals[:num_samples]
-    reconstructed = reconstructed[:num_samples]
+            # Plot reconstructed image
+            axes[i, 1].imshow(reconstructed)
+            axes[i, 1].set_title('Reconstructed')
+            axes[i, 1].axis('off')
 
-    return originals, reconstructed
+    plt.tight_layout()
+    return fig
 
 def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path='.'):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -342,11 +369,6 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     
     # For accumulating output
     output_text = []
-
-    # For accumulating comparison images
-    all_originals = []
-    all_reconstructed = []
-    comparison_epochs = []
 
     for epoch in range(num_epochs):
         model.train()
@@ -390,8 +412,8 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        # Clear the previous output
-        clear_output(wait=False)
+        # Clear the previous output and create a new plot
+        clear_output(wait=True)
         
         # Display accumulated text output
         print("\n".join(output_text))
@@ -408,27 +430,10 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         plt.close(fig)  # Close the figure to free up memory
         
         # Visualize image comparisons every 10 epochs (or adjust as needed)
-        if (epoch + 1) % 5 == 0:
-            originals, reconstructed = visualize_comparisons(model, val_loader, device)
-            all_originals.extend(originals)
-            all_reconstructed.extend(reconstructed)
-            comparison_epochs.extend([epoch+1] * len(originals))
-
-            # Plot all accumulated comparisons
-            num_comparisons = len(all_originals)
-            fig, axes = plt.subplots(num_comparisons, 2, figsize=(10, 5*num_comparisons))
-            for i in range(num_comparisons):
-                axes[i, 0].imshow(all_originals[i])
-                axes[i, 0].set_title(f'Original (Epoch {comparison_epochs[i]})')
-                axes[i, 0].axis('off')
-
-                axes[i, 1].imshow(all_reconstructed[i])
-                axes[i, 1].set_title(f'Reconstructed (Epoch {comparison_epochs[i]})')
-                axes[i, 1].axis('off')
-
-            plt.tight_layout()
-            display(fig)
-            plt.close(fig)
+        if (epoch + 1) % 10 == 0:
+            comparison_fig = visualize_comparisons(model, val_loader, device)
+            display(comparison_fig)
+            plt.close(comparison_fig)
         
         scheduler.step(val_loss)
 

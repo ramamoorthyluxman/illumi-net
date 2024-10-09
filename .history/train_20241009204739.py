@@ -391,7 +391,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         val_losses.append(val_loss)
 
         # Clear the previous output
-        clear_output(wait=False)
+        clear_output(wait=True)
         
         # Display accumulated text output
         print("\n".join(output_text))
@@ -408,7 +408,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         plt.close(fig)  # Close the figure to free up memory
         
         # Visualize image comparisons every 10 epochs (or adjust as needed)
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 2 == 0:
             originals, reconstructed = visualize_comparisons(model, val_loader, device)
             all_originals.extend(originals)
             all_reconstructed.extend(reconstructed)

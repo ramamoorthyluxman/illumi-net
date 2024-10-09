@@ -76,8 +76,8 @@ PS_METHOD = "RPCA_SOLVER"    # Robust PCA
 # RTI
 RTI_NET_EPOCHS = 1000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 10
-RTI_NET_PATCH_SIZE = [128,128] #[height, width]
-RTI_MAX_NUMBER_PATCHES = 1 # Randomly choose desired number of patches from the image. 
+RTI_NET_PATCH_SIZE = [33,32] #[height, width]
+RTI_MAX_NUMBER_PATCHES = 1 # Randomly choose desired number of patches from the image. Set it to 0 if you want to consider the whole image
 
 
 RTI_MODEL_PATH = r'D:\Acquisitions\Ram\illumi-net\saved_models\relighting_model_epoch_90.pth'

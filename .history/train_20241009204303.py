@@ -343,11 +343,6 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     # For accumulating output
     output_text = []
 
-    # For accumulating comparison images
-    all_originals = []
-    all_reconstructed = []
-    comparison_epochs = []
-
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
@@ -390,8 +385,8 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        # Clear the previous output
-        clear_output(wait=False)
+        # Clear the previous output and create a new plot
+        clear_output(wait=True)
         
         # Display accumulated text output
         print("\n".join(output_text))
@@ -408,27 +403,10 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         plt.close(fig)  # Close the figure to free up memory
         
         # Visualize image comparisons every 10 epochs (or adjust as needed)
-        if (epoch + 1) % 5 == 0:
-            originals, reconstructed = visualize_comparisons(model, val_loader, device)
-            all_originals.extend(originals)
-            all_reconstructed.extend(reconstructed)
-            comparison_epochs.extend([epoch+1] * len(originals))
-
-            # Plot all accumulated comparisons
-            num_comparisons = len(all_originals)
-            fig, axes = plt.subplots(num_comparisons, 2, figsize=(10, 5*num_comparisons))
-            for i in range(num_comparisons):
-                axes[i, 0].imshow(all_originals[i])
-                axes[i, 0].set_title(f'Original (Epoch {comparison_epochs[i]})')
-                axes[i, 0].axis('off')
-
-                axes[i, 1].imshow(all_reconstructed[i])
-                axes[i, 1].set_title(f'Reconstructed (Epoch {comparison_epochs[i]})')
-                axes[i, 1].axis('off')
-
-            plt.tight_layout()
-            display(fig)
-            plt.close(fig)
+        if (epoch + 1) % 2 == 0:
+            comparison_fig = visualize_comparisons(model, val_loader, device)
+            display(comparison_fig)
+            plt.close(comparison_fig)
         
         scheduler.step(val_loss)
 

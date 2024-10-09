@@ -391,7 +391,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         val_losses.append(val_loss)
 
         # Clear the previous output
-        clear_output(wait=False)
+        clear_output(wait=True)
         
         # Display accumulated text output
         print("\n".join(output_text))
