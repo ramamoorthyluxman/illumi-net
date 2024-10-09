@@ -8,6 +8,38 @@ import cv2
 import random
 from tqdm import tqdm
 
+def calculate_and_adjust_patches(image_width, image_height, patch_width, patch_height):
+    # Calculate initial number of patches
+    patches_x = image_width / patch_width
+    patches_y = image_height / patch_height
+
+    # Check if adjustments are needed
+    if not patches_x.is_integer() or not patches_y.is_integer():
+        # Adjust patch width
+        adjusted_patch_width = image_width / round(patches_x)
+        patches_x = image_width / adjusted_patch_width
+
+        # Adjust patch height
+        adjusted_patch_height = image_height / round(patches_y)
+        patches_y = image_height / adjusted_patch_height
+
+        # Ensure we have whole numbers of patches
+        patches_x = int(patches_x)
+        patches_y = int(patches_y)
+
+        print(f"Adjusted patch size: {adjusted_patch_width:.2f} x {adjusted_patch_height:.2f}")
+    else:
+        adjusted_patch_width = patch_width
+        adjusted_patch_height = patch_height
+        patches_x = int(patches_x)
+        patches_y = int(patches_y)
+        print("No adjustment needed")
+
+    total_patches = patches_x * patches_y
+
+    return adjusted_patch_width, adjusted_patch_height, total_patches
+    
+
 # Convert Cartesian coordinates to spherical coordinates    
 def Cartesian2spherical3D(x, y, z):
     """

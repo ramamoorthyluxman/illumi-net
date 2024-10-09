@@ -13,6 +13,60 @@ from IPython.display import clear_output, display
 import torchvision.models as models
 import torchvision.transforms as transforms
 
+def calculate_patches(patch_height, patch_width, image_height, image_width, desired_patches):
+    def adjust_patch_size(p_height, p_width, i_height, i_width, num_patches):
+        # Calculate patches in each dimension
+        patches_x = i_width // p_width
+        patches_y = i_height // p_height
+        total_patches = patches_x * patches_y
+
+        # If total patches is less than desired, increase patch count
+        while total_patches < num_patches and (patches_x + 1) * (patches_y + 1) <= num_patches:
+            if i_width / (patches_x + 1) >= i_height / (patches_y + 1):
+                patches_x += 1
+            else:
+                patches_y += 1
+            total_patches = patches_x * patches_y
+
+        # Adjust patch size to fit image perfectly
+        new_p_width = i_width // patches_x
+        new_p_height = i_height // patches_y
+
+        return new_p_height, new_p_width, patches_x * patches_y
+
+    # Case 4: Patch size greater than image size
+    if patch_width > image_width or patch_height > image_height:
+        patch_width = min(patch_width, image_width)
+        patch_height = min(patch_height, image_height)
+
+    # Calculate initial number of patches
+    patches_x = image_width // patch_width
+    patches_y = image_height // patch_height
+    total_patches = patches_x * patches_y
+
+    # Case 3: Desired patches is 0 (auto-calculate)
+    if desired_patches == 0:
+        return patch_height, patch_width, total_patches
+
+    # Case 1: Desired patches fits perfectly
+    if total_patches == desired_patches:
+        return patch_height, patch_width, desired_patches
+
+    # Case 2: Desired patches exceeds image capacity or doesn't fit perfectly
+    new_height, new_width = patch_height, patch_width
+    for i in range(-10, 11):  # Try adjusting by -10 to +10 pixels
+        test_height = patch_height + i
+        test_width = patch_width + i
+        if image_height % test_height == 0 and image_width % test_width == 0:
+            new_height, new_width = test_height, test_width
+            break
+
+    # If slight adjustment didn't work, use the adjust_patch_size function
+    if new_height == patch_height and new_width == patch_width:
+        new_height, new_width, total_patches = adjust_patch_size(patch_height, patch_width, image_height, image_width, desired_patches)
+
+    return new_height, new_width, total_patches
+    
 
 class PerceptualLoss(nn.Module):
     def __init__(self):
@@ -70,70 +124,11 @@ class PatchRelightingDataset(Dataset):
         self.albedo = torch.ByteTensor(albedo)
         self.normals = torch.ByteTensor(normals)
         self.targets = torch.ByteTensor(targets)
-        self.patch_size, self.patches_per_image = self.calculate_patches() 
-        print("Adjusted patch size, number of patches: ", self.patch_size, self.patches_per_image)       
+        self.patch_size = params.RTI_NET_PATCH_SIZE 
+        self.patches_per_image = params.RTI_MAX_NUMBER_PATCHES  
+
+        calculate_patches   
         self.patches = self._create_patches()  
-
-    def calculate_patches(self):
-        print("Calculating the patches")
-        patch_height, patch_width = params.RTI_NET_PATCH_SIZE
-        desired_patches = params.RTI_MAX_NUMBER_PATCHES
-        _, _, image_height, image_width = self.distances.shape
-        # Case 4: Patch size greater than image size
-        if patch_width > image_width or patch_height > image_height:
-            patch_width = min(patch_width, image_width)
-            patch_height = min(patch_height, image_height)
-
-        # Calculate initial number of patches
-        patches_x = image_width // patch_width
-        patches_y = image_height // patch_height
-        total_patches = patches_x * patches_y
-
-        # Case 3: Desired patches is 0 (auto-calculate)
-        if desired_patches == 0:
-            return [patch_height, patch_width], total_patches
-
-        # Case 1: Desired patches fits perfectly
-        if total_patches == desired_patches:
-            return [patch_height, patch_width], desired_patches
-
-        # Case 2: Desired patches exceeds image capacity or doesn't fit perfectly
-        new_height, new_width = patch_height, patch_width
-        
-        # Try adjusting by -10 to +10 pixels
-        for i in range(-10, 11):
-            test_height = patch_height + i
-            test_width = patch_width + i
-            if (image_height % test_height == 0 and image_width % test_width == 0 and
-                (image_width // test_width) * (image_height // test_height) >= desired_patches):
-                new_height, new_width = test_height, test_width
-                break
-
-        # If slight adjustment didn't work, adjust more significantly
-        if new_height == patch_height and new_width == patch_width:
-            # Calculate patches in each dimension
-            patches_x = image_width // patch_width
-            patches_y = image_height // patch_height
-            total_patches = patches_x * patches_y
-
-            # If total patches is less than desired, increase patch count
-            while total_patches < desired_patches and (patches_x + 1) * (patches_y + 1) <= desired_patches:
-                if image_width / (patches_x + 1) >= image_height / (patches_y + 1):
-                    patches_x += 1
-                else:
-                    patches_y += 1
-                total_patches = patches_x * patches_y
-
-            # Adjust patch size to fit image perfectly
-            new_width = image_width // patches_x
-            new_height = image_height // patches_y
-
-        # Calculate final number of patches
-        final_patches_x = image_width // new_width
-        final_patches_y = image_height // new_height
-        total_patches = final_patches_x * final_patches_y
-
-        return [new_height, new_width], total_patches
 
     def _create_patches(self):
         patches = []

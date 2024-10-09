@@ -170,14 +170,19 @@ class dataset:
         self.surface_albedos = np.array(self.surface_albedos)
                                                 
     def load_distance_matrices(self):
-        for idx, acq in enumerate(self.acqs):
-            distance_matrix = np.load(os.path.join(acq, "distance_matrices.npy"))
-            self.distance_matrices.append(distance_matrix[self.rand_indices[idx], :, :])                
+        if not params.SAME_ILLUMINATION:
+            for idx, acq in enumerate(self.acqs):
+                distance_matrix = np.load(os.path.join(acq, "distance_matrices.npy"))
+                self.distance_matrices.append(distance_matrix[self.rand_indices[idx], :, :])                
+        else:
+            self.distance_matrices = np.load(os.path.join(self.acqs[0], "distance_matrices.npy"))[self.rand_indices]
 
         self.distance_matrices = np.array(self.distance_matrices)
                                                     
     def load_cosine_matrices(self):
-        for idx, acq in enumerate(self.acqs):
-            cosine_matrix = np.load(os.path.join(acq, "angles_matrices.npy"))
-            self.cosine_matrices.append(cosine_matrix[self.rand_indices[idx], :, :])
-        self.cosine_matrices = np.array(self.cosine_matrices)
+        if not params.SAME_ILLUMINATION:
+            for idx, acq in enumerate(self.acqs):
+                cosine_matrix = np.load(os.path.join(acq, "angles_matrices.npy"))
+                self.cosine_matrices.append(cosine_matrix[self.rand_indices[idx], :, :])
+        else:
+            self.cosine_matrices = np.cos(np.load(os.path.join(self.acqs[0], "angles_matrices.npy")))[self.rand_indices]

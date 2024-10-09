@@ -8,6 +8,61 @@ import cv2
 import random
 from tqdm import tqdm
 
+def calculate_patches(patch_height, patch_width, image_height, image_width, desired_patches):
+    def adjust_patch_size(p_height, p_width, i_height, i_width, num_patches):
+        # Calculate patches in each dimension
+        patches_x = i_width // p_width
+        patches_y = i_height // p_height
+        total_patches = patches_x * patches_y
+
+        # If total patches is less than desired, increase patch count
+        while total_patches < num_patches and (patches_x + 1) * (patches_y + 1) <= num_patches:
+            if i_width / (patches_x + 1) >= i_height / (patches_y + 1):
+                patches_x += 1
+            else:
+                patches_y += 1
+            total_patches = patches_x * patches_y
+
+        # Adjust patch size to fit image perfectly
+        new_p_width = i_width // patches_x
+        new_p_height = i_height // patches_y
+
+        return new_p_height, new_p_width, patches_x * patches_y
+
+    # Case 4: Patch size greater than image size
+    if patch_width > image_width or patch_height > image_height:
+        patch_width = min(patch_width, image_width)
+        patch_height = min(patch_height, image_height)
+
+    # Calculate initial number of patches
+    patches_x = image_width // patch_width
+    patches_y = image_height // patch_height
+    total_patches = patches_x * patches_y
+
+    # Case 3: Desired patches is 0 (auto-calculate)
+    if desired_patches == 0:
+        return patch_height, patch_width, total_patches
+
+    # Case 1: Desired patches fits perfectly
+    if total_patches == desired_patches:
+        return patch_height, patch_width, desired_patches
+
+    # Case 2: Desired patches exceeds image capacity or doesn't fit perfectly
+    new_height, new_width = patch_height, patch_width
+    for i in range(-10, 11):  # Try adjusting by -10 to +10 pixels
+        test_height = patch_height + i
+        test_width = patch_width + i
+        if image_height % test_height == 0 and image_width % test_width == 0:
+            new_height, new_width = test_height, test_width
+            break
+
+    # If slight adjustment didn't work, use the adjust_patch_size function
+    if new_height == patch_height and new_width == patch_width:
+        new_height, new_width, total_patches = adjust_patch_size(patch_height, patch_width, image_height, image_width, desired_patches)
+
+    return new_height, new_width, total_patches
+    
+
 # Convert Cartesian coordinates to spherical coordinates    
 def Cartesian2spherical3D(x, y, z):
     """

@@ -70,12 +70,10 @@ class PatchRelightingDataset(Dataset):
         self.albedo = torch.ByteTensor(albedo)
         self.normals = torch.ByteTensor(normals)
         self.targets = torch.ByteTensor(targets)
-        self.patch_size, self.patches_per_image = self.calculate_patches() 
-        print("Adjusted patch size, number of patches: ", self.patch_size, self.patches_per_image)       
+        self.patch_size, self.patches_per_image = self.calculate_patches()        
         self.patches = self._create_patches()  
 
     def calculate_patches(self):
-        print("Calculating the patches")
         patch_height, patch_width = params.RTI_NET_PATCH_SIZE
         desired_patches = params.RTI_MAX_NUMBER_PATCHES
         _, _, image_height, image_width = self.distances.shape
@@ -132,6 +130,8 @@ class PatchRelightingDataset(Dataset):
         final_patches_x = image_width // new_width
         final_patches_y = image_height // new_height
         total_patches = final_patches_x * final_patches_y
+
+        print("Adjusted patch size, number of patches: ", [new_height, new_width], total_patches)
 
         return [new_height, new_width], total_patches
 

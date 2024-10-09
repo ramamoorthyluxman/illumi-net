@@ -75,7 +75,6 @@ class PatchRelightingDataset(Dataset):
         self.patches = self._create_patches()  
 
     def calculate_patches(self):
-        print("Calculating the patches")
         patch_height, patch_width = params.RTI_NET_PATCH_SIZE
         desired_patches = params.RTI_MAX_NUMBER_PATCHES
         _, _, image_height, image_width = self.distances.shape

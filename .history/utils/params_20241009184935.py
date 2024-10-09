@@ -61,8 +61,8 @@ ACQ_PATHS = [r"C:\Users\etudiants\iCloudDrive\Documents\postdoc-cheminova\illumi
 
 # Dataset params
 MAX_NB_IMAGES_PER_ACQ = 105
-COMPUTE_NORMALS_AND_ALBEDO = False
-COMPUTE_DISTANCES_AND_COSINES = False
+COMPUTE_NORMALS_AND_ALBEDO = True
+COMPUTE_DISTANCES_AND_COSINES = True
 SURFACE_PHYSCIAL_SIZE = [(128*0.250)/2704, (128*0.120)/1800] #default [0.250, 0.120]
 
 

@@ -70,15 +70,13 @@ class PatchRelightingDataset(Dataset):
         self.albedo = torch.ByteTensor(albedo)
         self.normals = torch.ByteTensor(normals)
         self.targets = torch.ByteTensor(targets)
-        self.patch_size, self.patches_per_image = self.calculate_patches() 
-        print("Adjusted patch size, number of patches: ", self.patch_size, self.patches_per_image)       
+        self.patch_size, self.patches_per_image  =  
+         = params.RTI_MAX_NUMBER_PATCHES  
+        self.calculate_patches()
         self.patches = self._create_patches()  
 
-    def calculate_patches(self):
-        print("Calculating the patches")
+    def calculate_patches(patch_height, patch_width, image_height, image_width, desired_patches):
         patch_height, patch_width = params.RTI_NET_PATCH_SIZE
-        desired_patches = params.RTI_MAX_NUMBER_PATCHES
-        _, _, image_height, image_width = self.distances.shape
         # Case 4: Patch size greater than image size
         if patch_width > image_width or patch_height > image_height:
             patch_width = min(patch_width, image_width)
@@ -91,11 +89,11 @@ class PatchRelightingDataset(Dataset):
 
         # Case 3: Desired patches is 0 (auto-calculate)
         if desired_patches == 0:
-            return [patch_height, patch_width], total_patches
+            return patch_height, patch_width, total_patches
 
         # Case 1: Desired patches fits perfectly
         if total_patches == desired_patches:
-            return [patch_height, patch_width], desired_patches
+            return patch_height, patch_width, desired_patches
 
         # Case 2: Desired patches exceeds image capacity or doesn't fit perfectly
         new_height, new_width = patch_height, patch_width

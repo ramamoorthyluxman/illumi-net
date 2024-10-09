@@ -63,7 +63,9 @@ ACQ_PATHS = [r"C:\Users\etudiants\iCloudDrive\Documents\postdoc-cheminova\illumi
 MAX_NB_IMAGES_PER_ACQ = 105
 COMPUTE_NORMALS_AND_ALBEDO = False
 COMPUTE_DISTANCES_AND_COSINES = False
-SURFACE_PHYSCIAL_SIZE = [(128*0.250)/2704, (128*0.120)/1800] #default [0.250, 0.120]
+SURFACE_PHYSCIAL_SIZE = [0.250, 0.120] #default [0.250, 0.120]
+SAME_ILLUMINATION = False
+
 
 
 # Compute normals params
@@ -77,7 +79,6 @@ PS_METHOD = "RPCA_SOLVER"    # Robust PCA
 RTI_NET_EPOCHS = 1000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 10
 RTI_NET_PATCH_SIZE = [128,128] #[height, width]
-RTI_MAX_NUMBER_PATCHES = 0 # Randomly choose desired number of patches from the image. Set it to 0 if you want to consider the whole image
 
 
 RTI_MODEL_PATH = r'D:\Acquisitions\Ram\illumi-net\saved_models\relighting_model_epoch_90.pth'

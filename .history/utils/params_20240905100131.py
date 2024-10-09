@@ -1,4 +1,4 @@
-ACQ_PATHS = [r"C:\Users\etudiants\iCloudDrive\Documents\postdoc-cheminova\illumi-net\data\2024_02_22_1_1\rti_sub_images"]
+ACQ_PATHS = [r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_1\images\Face_A\rti"]
             # r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_2\images\Face_A\rti"]
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_3\images\Face_A\rti",
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_4\images\Face_A\rti",
@@ -60,24 +60,26 @@ ACQ_PATHS = [r"C:\Users\etudiants\iCloudDrive\Documents\postdoc-cheminova\illumi
             #  r"D:\Acquisitions\Ram\CC_LANAU\anzo_aillament_4\dome\dome\2024_02_21_10_5\images\Face_A\rti"]
 
 # Dataset params
-MAX_NB_IMAGES_PER_ACQ = 105
+MAX_NB_IMAGES_PER_ACQ = 5
 COMPUTE_NORMALS_AND_ALBEDO = False
 COMPUTE_DISTANCES_AND_COSINES = False
-SURFACE_PHYSCIAL_SIZE = [(128*0.250)/2704, (128*0.120)/1800] #default [0.250, 0.120]
+SURFACE_PHYSCIAL_SIZE = [0.250, 0.120] #default [0.250, 0.120]
+SAME_ILLUMINATION = False
+
 
 
 # Compute normals params
-# PS_METHOD = "L2_SOLVER"    # Least-squares
+PS_METHOD = "L2_SOLVER"    # Least-squares
 # PS_METHOD = "L1_SOLVER_MULTICORE"    # L1 residual minimization
 # PS_METHOD = "SBL_SOLVER_MULTICORE"    # Sparse Bayesian Learning
-PS_METHOD = "RPCA_SOLVER"    # Robust PCA
+# PS_METHOD = "RPCA_SOLVER"    # Robust PCA
 
 
 # RTI
+RTI_NET_MAX_NUMBER_OF_IMAGES = 105
 RTI_NET_EPOCHS = 1000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 10
-RTI_NET_PATCH_SIZE = [128,128] #[height, width]
-RTI_MAX_NUMBER_PATCHES = 0 # Randomly choose desired number of patches from the image. Set it to 0 if you want to consider the whole image
-
+RTI_NET_PATCH_SIZE = 64
+RTI_NET_PATCHES_PER_IMAGE = 42*28
 
 RTI_MODEL_PATH = r'D:\Acquisitions\Ram\illumi-net\saved_models\relighting_model_epoch_90.pth'
