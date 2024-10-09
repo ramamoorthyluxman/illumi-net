@@ -313,9 +313,9 @@ def visualize_comparisons(model, val_loader, device, num_samples=10):
 
             outputs, _ = model(distances, cosines, albedo, normals)
 
-            # Convert tensors to numpy arrays and change from BGR to RGB
-            originals.extend([img[:,:,::-1] for img in targets.cpu().numpy()])
-            reconstructed.extend([img[:,:,::-1] for img in outputs.cpu().numpy()])
+            # Convert tensors to numpy arrays
+            originals.extend(targets.cpu().numpy())
+            reconstructed.extend(outputs.cpu().numpy())
 
             if len(originals) >= num_samples:
                 break
@@ -391,7 +391,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         val_losses.append(val_loss)
 
         # Clear the previous output
-        clear_output(wait=True)
+        clear_output(wait=False)
         
         # Display accumulated text output
         print("\n".join(output_text))
@@ -405,40 +405,31 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         ax.set_title('Training and Validation Loss')
         ax.legend()
         display(fig)
-        plt.close(fig)
-
-        # Save comparison plots every 5 epochs
+        plt.close(fig)  # Close the figure to free up memory
+        
+        # Visualize image comparisons every 10 epochs (or adjust as needed)
         if (epoch + 1) % 5 == 0:
             originals, reconstructed = visualize_comparisons(model, val_loader, device)
             all_originals.extend(originals)
             all_reconstructed.extend(reconstructed)
             comparison_epochs.extend([epoch+1] * len(originals))
 
-            # Calculate grid size
+            # Plot all accumulated comparisons
             num_comparisons = len(all_originals)
-            grid_size = int(np.ceil(np.sqrt(num_comparisons)))
-
-            # Create a grid of subplots
-            fig, axes = plt.subplots(grid_size, grid_size * 2, figsize=(20, 10 * grid_size))
-            axes = axes.flatten()
-
+            fig, axes = plt.subplots(num_comparisons, 2, figsize=(10, 5*num_comparisons))
             for i in range(num_comparisons):
-                axes[i*2].imshow(all_originals[i])
-                axes[i*2].set_title(f'Original (Epoch {comparison_epochs[i]})')
-                axes[i*2].axis('off')
+                axes[i, 0].imshow(all_originals[i])
+                axes[i, 0].set_title(f'Original (Epoch {comparison_epochs[i]})')
+                axes[i, 0].axis('off')
 
-                axes[i*2+1].imshow(all_reconstructed[i])
-                axes[i*2+1].set_title(f'Reconstructed (Epoch {comparison_epochs[i]})')
-                axes[i*2+1].axis('off')
-
-            # Hide unused subplots
-            for i in range(num_comparisons * 2, len(axes)):
-                axes[i].axis('off')
+                axes[i, 1].imshow(all_reconstructed[i])
+                axes[i, 1].set_title(f'Reconstructed (Epoch {comparison_epochs[i]})')
+                axes[i, 1].axis('off')
 
             plt.tight_layout()
-            plt.savefig(os.path.join(model_save_path, f'comparisons_epoch_{epoch+1}.png'))
+            display(fig)
             plt.close(fig)
-
+        
         scheduler.step(val_loss)
 
         # Save model every N epochs

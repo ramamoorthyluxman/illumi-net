@@ -76,7 +76,7 @@ PS_METHOD = "RPCA_SOLVER"    # Robust PCA
 # RTI
 RTI_NET_EPOCHS = 1000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 10
-RTI_NET_PATCH_SIZE = [32,32] #[height, width]
+RTI_NET_PATCH_SIZE = [16,16] #[height, width]
 RTI_MAX_NUMBER_PATCHES = 1 # Randomly choose desired number of patches from the image. 
 
 

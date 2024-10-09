@@ -313,9 +313,9 @@ def visualize_comparisons(model, val_loader, device, num_samples=10):
 
             outputs, _ = model(distances, cosines, albedo, normals)
 
-            # Convert tensors to numpy arrays and change from BGR to RGB
-            originals.extend([img[:,:,::-1] for img in targets.cpu().numpy()])
-            reconstructed.extend([img[:,:,::-1] for img in outputs.cpu().numpy()])
+            # Convert tensors to numpy arrays
+            originals.extend(targets.cpu().numpy())
+            reconstructed.extend(outputs.cpu().numpy())
 
             if len(originals) >= num_samples:
                 break
@@ -396,7 +396,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         # Display accumulated text output
         print("\n".join(output_text))
         
-        # Create and display the loss plot
+        # Create and save the loss plot
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(epochs, train_losses, 'b-', label='Train Loss')
         ax.plot(epochs, val_losses, 'r-', label='Validation Loss')
@@ -404,7 +404,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         ax.set_ylabel('Loss')
         ax.set_title('Training and Validation Loss')
         ax.legend()
-        display(fig)
+        plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch+1}.png'))
         plt.close(fig)
 
         # Save comparison plots every 5 epochs

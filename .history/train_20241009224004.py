@@ -396,7 +396,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         # Display accumulated text output
         print("\n".join(output_text))
         
-        # Create and display the loss plot
+        # Create and save the loss plot
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(epochs, train_losses, 'b-', label='Train Loss')
         ax.plot(epochs, val_losses, 'r-', label='Validation Loss')
@@ -404,11 +404,11 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         ax.set_ylabel('Loss')
         ax.set_title('Training and Validation Loss')
         ax.legend()
-        display(fig)
+        plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch+1}.png'))
         plt.close(fig)
 
         # Save comparison plots every 5 epochs
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 2 == 0:
             originals, reconstructed = visualize_comparisons(model, val_loader, device)
             all_originals.extend(originals)
             all_reconstructed.extend(reconstructed)
