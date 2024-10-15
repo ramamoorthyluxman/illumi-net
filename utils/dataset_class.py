@@ -166,7 +166,11 @@ class dataset:
                                                 
     def load_surface_albedos(self):
         for acq in self.acqs:
-            self.surface_albedos.append(cv2.imread(os.path.join(acq, "albedo.png"), cv2.IMREAD_GRAYSCALE))
+            albedo = cv2.imread(os.path.join(acq, "albedo.png"), cv2.IMREAD_UNCHANGED)
+            if len(albedo.shape) == 2:
+                # For grayscale, reshape to (H, W, 1)
+                albedo = albedo[..., np.newaxis]
+            self.surface_albedos.append(albedo)
         self.surface_albedos = np.array(self.surface_albedos)
                                                 
     def load_distance_matrices(self):

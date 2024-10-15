@@ -5,6 +5,12 @@ import os
 import train
 import numpy as np
 
-data = dataset(params.ACQ_PATHS)
+data_ = dataset(params.ACQ_PATHS)
 
-train = train.train(data.distance_matrices, data.cosine_matrices, data.surface_albedos, data.surface_normals, data.images)
+print("Distance matrices shape: ", data_.distance_matrices.shape)
+print("Cosine matrices shape: ", data_.cosine_matrices.shape)
+print("Surface albedos shape: ", data_.surface_albedos.shape)
+print("Surface normals shape: ", data_.surface_normals.shape)
+print("Images shape: ", data_.images.shape)
+
+train = train.train(data_.distance_matrices, data_.cosine_matrices, data_.surface_albedos, data_.surface_normals, data_.images)
