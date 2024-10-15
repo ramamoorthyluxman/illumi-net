@@ -1,4 +1,4 @@
-ACQ_PATHS = [r"C:\Users\etudiants\iCloudDrive\Documents\postdoc-cheminova\illumi-net\data\2024_02_22_1_1\rti_sub_images"]
+ACQ_PATHS = [r"/work/imvia/ra7916lu/illumi-net/data/2024_02_22_1_1/rti_sub_images"]
             # r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_2\images\Face_A\rti"]
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_3\images\Face_A\rti",
             #  r"D:\Acquisitions\Ram\CC_LANAU\retrato de lola flores\dome\2024_02_22_1_4\images\Face_A\rti",
@@ -74,10 +74,23 @@ PS_METHOD = "RPCA_SOLVER"    # Robust PCA
 
 
 # RTI
-RTI_NET_EPOCHS = 1000
+RTI_NET_EPOCHS = 2000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 10
-RTI_NET_PATCH_SIZE = [32,32] #[height, width]
+RTI_NET_PATCH_SIZE = [128,128] #[height, width]
 RTI_MAX_NUMBER_PATCHES = 1 # Randomly choose desired number of patches from the image. 
 
 
 RTI_MODEL_PATH = r'D:\Acquisitions\Ram\illumi-net\saved_models\relighting_model_epoch_90.pth'
+
+
+# Model Params
+BATCH_SIZE = 64
+TRAIN_SHUFFLE = True
+VAL_SHUFFLE = False
+NUM_WORKERS = 16
+LEARNING_RATE = 0.0005
+LAMBDA_MSE = 1.0
+LAMDA_PERCEPTUAL = 0.3
+
+# Visualizations
+SAMPLE_NUMBER_OF_COMPARISONS = 8
