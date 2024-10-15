@@ -9,12 +9,6 @@ from utils import params
 
 class PhotometricStereo_traditional:
     def __init__(self, image_paths: List[str], light_dirs: List[Tuple[float, float, float]]):
-        """
-        Initialize with paths to images and light directions in cartesian coordinates.
-
-        :param image_paths: A list of strings, paths to the images.
-        :param light_dirs: A list of tuples (x, y, z) representing light directions in cartesian coordinates.
-        """
         if len(image_paths) != len(light_dirs):
             raise ValueError("Number of images must match number of light directions")
 
@@ -36,72 +30,65 @@ class PhotometricStereo_traditional:
         if len(self.images) < 3:
             raise ValueError("At least 3 images are required for photometric stereo")
 
-        self.height, self.width = self.images[0].shape[:2]
+        self.height, self.width, self.channels = self.images[0].shape
 
     def _load_images(self, image_paths: List[str]) -> List[np.ndarray]:
-        """
-        Load images from paths, converting to grayscale if necessary.
-
-        :param image_paths: List of image file paths.
-        :return: List of loaded images as numpy arrays.
-        """
         images = []
         for path in image_paths:
             if not os.path.exists(path):
                 raise FileNotFoundError(f"Image file not found: {path}")
-            img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            img = cv2.imread(path, cv2.IMREAD_COLOR)
             if img is None:
                 raise IOError(f"Failed to load image: {path}")
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
             images.append(img.astype(np.float32) / 255.0)  # Normalize to [0, 1]
         return images
 
     def estimate_normals_and_albedo(self):
-        """
-        Estimate surface normals and albedo using the photometric stereo approach.
+        normal_maps = []
+        albedo_maps = []
 
-        
-        """
-        # Photometric Stereo
-        self.rps = rps.RPS()
-        self.rps.L = np.array(self.light_dirs).T
-        img_vectors = [im.reshape((-1, 1)).flatten() for im in self.images]
-        self.rps.M = np.array(img_vectors).T
-        self.rps.height = self.height
-        self.rps.width = self.width
-        start = time.time()
-        self.rps.solve(self.METHOD)    # Compute
-        elapsed_time = time.time() - start
-        print("Photometric stereo: elapsed_time:{0}".format(elapsed_time) + "[sec]")
+        for channel in range(3):  # Process each RGB channel separately
+            self.rps = rps.RPS()
+            self.rps.L = np.array(self.light_dirs).T
+            img_vectors = [im[:,:,channel].reshape((-1, 1)).flatten() for im in self.images]
+            self.rps.M = np.array(img_vectors).T
+            self.rps.height = self.height
+            self.rps.width = self.width
+            
+            start = time.time()
+            self.rps.solve(self.METHOD)
+            elapsed_time = time.time() - start
+            print(f"Photometric stereo for channel {channel}: elapsed_time:{elapsed_time:.2f}[sec]")
 
-        return self.rps.N
+            normal_maps.append(self.rps.N)
+            albedo_maps.append(self.rps.albedo)
+
+        # Combine the results
+        self.normal_map = np.mean(normal_maps, axis=0)
+        # Reshape normal_map to (height, width, 3)
+        self.normal_map = self.normal_map.reshape(self.height, self.width, 3)
+        # Normalize each normal vector
+        norm = np.linalg.norm(self.normal_map, axis=2, keepdims=True)
+        self.normal_map = np.where(norm != 0, self.normal_map / norm, 0)
+
+        self.albedo_map = np.stack(albedo_maps, axis=-1)
+        # Reshape albedo_map to (height, width, 3)
+        self.albedo_map = self.albedo_map.reshape(self.height, self.width, 3)
+
+        return self.normal_map
 
     def save_results(self, output_dir):
-        """
-        Save the normal map and albedo map as images.
-
-        """
         os.makedirs(output_dir, exist_ok=True)
-        self.rps.save_normalmap(filename=os.path.join(output_dir, 'normal_map'))    # Save the estimated normal map
-        normal_img = np.reshape(self.rps.N, (self.rps.height * self.rps.width, 3))
-        # Save the estimated normal map as image``
-        normal_map = self.rps.N
-        normal_map = (normal_map - normal_map.min()) / (normal_map.max() - normal_map.min())  # Normalize to [0, 1]
-        normal_map = (normal_map * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        normal_map = np.reshape(normal_map, (self.rps.height, self.rps.width, 3))  # Reshape to (height, width, 3)
-        normal_map = cv2.cvtColor(normal_map, cv2.COLOR_BGR2RGB)
-        cv2.imwrite(os.path.join(output_dir, 'normal_map.png'), normal_map)
-        print("Saved normal map to: ", os.path.join(output_dir, 'normal_map.png'))        
-        # Reshape albedo to 2D
-        albedo_map = self.rps.albedo.reshape((self.height, self.width))
-        
-        # Normalize albedo to [0, 1] range
-        albedo_normalized = (albedo_map - albedo_map.min()) / (albedo_map.max() - albedo_map.min())
-        
-        # Convert to 8-bit unsigned integer [0, 255]
-        albedo_image = (albedo_normalized * 255).astype(np.uint8)
-        
-        # Save as PNG
-        cv2.imwrite(os.path.join(output_dir, 'albedo.png'), albedo_image)
-        print("Saved albedo to: ", os.path.join(output_dir, 'albedo.png'))        
-        
 
+        # Save normal map
+        normal_map = (self.normal_map + 1) / 2  # Convert from [-1, 1] to [0, 1]
+        normal_map = (normal_map * 255).astype(np.uint8)
+        cv2.imwrite(os.path.join(output_dir, 'normal_map.png'), cv2.cvtColor(normal_map, cv2.COLOR_RGB2BGR))
+        print("Saved normal map to:", os.path.join(output_dir, 'normal_map.png'))
+
+        # Save albedo map
+        albedo_normalized = (self.albedo_map - self.albedo_map.min()) / (self.albedo_map.max() - self.albedo_map.min())
+        albedo_image = (albedo_normalized * 255).astype(np.uint8)
+        cv2.imwrite(os.path.join(output_dir, 'albedo.png'), cv2.cvtColor(albedo_image, cv2.COLOR_RGB2BGR))
+        print("Saved albedo to:", os.path.join(output_dir, 'albedo.png'))

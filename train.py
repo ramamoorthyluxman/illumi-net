@@ -68,9 +68,9 @@ class PatchRelightingDataset(Dataset):
     def __init__(self, distances, cosines, albedo, normals, targets):
         self.distances = torch.FloatTensor(distances)
         self.cosines = torch.FloatTensor(cosines)
-        self.albedo = torch.ByteTensor(albedo)
-        self.normals = torch.ByteTensor(normals)
-        self.targets = torch.ByteTensor(targets)
+        self.albedo = torch.FloatTensor(albedo)
+        self.normals = torch.FloatTensor(normals)
+        self.targets = torch.FloatTensor(targets)
         self.patch_size, self.patches_per_image = self.calculate_patches() 
         print("Adjusted patch size, number of patches: ", self.patch_size, self.patches_per_image)       
         self.patches = self._create_patches()  
@@ -144,9 +144,9 @@ class PatchRelightingDataset(Dataset):
         return {
             'distances': self.distances[k, n][patch_slice],
             'cosines': self.cosines[k, n][patch_slice],
-            'albedo': self.albedo[k][patch_slice].float() / 255.0,
-            'normals': self.normals[k][patch_slice].float(),
-            'target': self.targets[k, n][patch_slice].float() / 255.0
+            'albedo': self.albedo[k][patch_slice],
+            'normals': self.normals[k][patch_slice],
+            'target': self.targets[k, n][patch_slice]
         }
 
 class ResidualBlock2D(nn.Module):
@@ -191,13 +191,13 @@ class AttentionBlock2D(nn.Module):
         return x * attention
 
 class RelightingModel(nn.Module):
-    def __init__(self, height, width):
+    def __init__(self, albedo_channels):
         super(RelightingModel, self).__init__()
         
         # Initial convolutions
         self.conv_distances = nn.Conv2d(1, 64, kernel_size=3, padding=1)
         self.conv_cosines = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        self.conv_albedo = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv_albedo = nn.Conv2d(albedo_channels, 32, kernel_size=3, padding=1)
         self.conv_normals = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         
         # Encoder with dilated convolutions
@@ -224,7 +224,7 @@ class RelightingModel(nn.Module):
         # Reshape inputs to add channel dimension
         distances = distances.unsqueeze(1)
         cosines = cosines.unsqueeze(1)
-        albedo = albedo.unsqueeze(1)
+        albedo = albedo.permute(0, 3, 1, 2)
         normals = normals.permute(0, 3, 1, 2)
 
         # Initial processing
@@ -433,8 +433,8 @@ def prepare_data(distances, cosines, albedo, normals, targets):
         val_distances.append(distances[i, val_indices, :, :])
         train_cosines.append(cosines[i, train_indices, :, :])
         val_cosines.append(cosines[i, val_indices, :, :])
-        train_targets.append(targets[i, train_indices, :, :])
-        val_targets.append(targets[i, val_indices, :, :])
+        train_targets.append(targets[i, train_indices, :, :, :])
+        val_targets.append(targets[i, val_indices, :, :, :])
 
     print("Train distances shape: ", np.array(train_distances).shape,
           "Val distances shape: ", np.array(val_distances).shape,
@@ -462,7 +462,6 @@ def prepare_data(distances, cosines, albedo, normals, targets):
     return train_loader, val_loader, train_indices, val_indices
 
 def train(distances, cosines, albedo, normals, targets):
-
     distances = np.transpose(distances, (0,1,3,2))
     cosines = np.transpose(cosines, (0,1,3,2))
 
@@ -479,7 +478,8 @@ def train(distances, cosines, albedo, normals, targets):
     np.save(os.path.join(model_save_path, 'val_indices.npy'), val_indices)
 
     # Initialize the model
-    model = RelightingModel(height=params.RTI_NET_PATCH_SIZE[0], width=params.RTI_NET_PATCH_SIZE[1])
+    albedo_channels = albedo.shape[-1]
+    model = RelightingModel(albedo_channels=albedo_channels)
 
     # Train the model
     trained_model = train_model(model, train_loader, val_loader, num_epochs=params.RTI_NET_EPOCHS, model_save_path=model_save_path)
