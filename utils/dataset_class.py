@@ -55,13 +55,14 @@ class dataset:
         self.images = []
 
         self.rand_indices = []
-        for i in range(len(self.acqs)):
-            self.rand_indices.append(random.sample(range(len(self.acqs[i])), min(len(self.acqs[i]), params.MAX_NB_IMAGES_PER_ACQ)))
-
+        
         self.lp_files, errors = ([path for folder in self.acqs for path in glob.glob(os.path.join(folder, "*.lp"))], [f"Error: No .lp file found in {folder}" for folder in self.acqs if not glob.glob(os.path.join(folder, "*.lp"))])
         print(errors)
 
         self.load_lps_and_img_paths()
+
+        for i in range(len(self.acqs)):
+            self.rand_indices.append(random.sample(range(len(self.lps_cartesian[i])), min(len(self.lps_cartesian[i]), params.MAX_NB_IMAGES_PER_ACQ)))
 
         if params.COMPUTE_NORMALS_AND_ALBEDO:
             self.computed_normals_and_albedos()

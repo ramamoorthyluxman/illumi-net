@@ -12,9 +12,6 @@ import matplotlib.pyplot as plt
 import torchvision.models as models
 import torchvision.transforms as transforms
 
-# Set environment variable for memory allocation
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:256'
-
 class PerceptualLoss(nn.Module):
     def __init__(self):
         super(PerceptualLoss, self).__init__()
@@ -36,7 +33,7 @@ class PerceptualLoss(nn.Module):
         return output
 
 class CombinedLoss(nn.Module):
-    def __init__(self, lambda_mse=params.LAMBDA_MSE, lambda_perceptual=params.LAMDA_PERCEPTUAL):
+    def __init__(self, lambda_mse=1.0, lambda_perceptual=0.1):
         super(CombinedLoss, self).__init__()
         self.mse_loss = nn.MSELoss()
         self.perceptual_loss = PerceptualLoss()
@@ -262,6 +259,43 @@ class RelightingModel(nn.Module):
         }
         return out, intermediates
     
+def visualize_output(model, val_loader, device):
+    # Get a random batch from the validation set
+    batch = next(iter(val_loader))
+    
+    # Select a random sample from the batch
+    idx = random.randint(0, batch['distances'].shape[0] - 1)
+    
+    distances = batch['distances'][idx:idx+1].to(device)
+    cosines = batch['cosines'][idx:idx+1].to(device)
+    albedo = batch['albedo'][idx:idx+1].to(device)
+    normals = batch['normals'][idx:idx+1].to(device)
+    target = batch['target'][idx:idx+1].to(device)
+
+    model.eval()
+    with torch.no_grad():
+        output, _ = model(distances, cosines, albedo, normals)
+
+    # Convert tensors to numpy arrays for plotting
+    output = output.cpu().numpy()[0]
+    target = target.cpu().numpy()[0]
+
+    # Create a figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Plot the ground truth
+    ax1.imshow(target)
+    ax1.set_title('Ground Truth')
+    ax1.axis('off')
+
+    # Plot the model output
+    ax2.imshow(output)
+    ax2.set_title('Model Output')
+    ax2.axis('off')
+
+    plt.tight_layout()
+    return fig
+
 def visualize_comparisons(model, val_loader, device, num_samples=10):
     model.eval()
     originals = []
@@ -290,58 +324,91 @@ def visualize_comparisons(model, val_loader, device, num_samples=10):
 
     return originals, reconstructed
 
-def plot_comparisons(originals, reconstructed, epoch, model_save_path):
-    num_comparisons = len(originals)
-    num_cols = 4  # We'll use 4 columns (2 pairs of original and reconstructed)
-    num_rows = (num_comparisons + 1) // 2  # Calculate number of rows needed
+def save_comparison_images(model, val_loader, device, epoch, model_save_path, num_samples=10):
+    model.eval()
+    
+    with torch.no_grad():
+        for batch in val_loader:
+            distances = batch['distances'].to(device)
+            cosines = batch['cosines'].to(device)
+            albedo = batch['albedo'].to(device)
+            normals = batch['normals'].to(device)
+            targets = batch['target'].to(device)
 
-    fig, axes = plt.subplots(num_rows, num_cols, figsize=(20, 10 * num_rows // 2))
-    fig.suptitle(f'Original vs Reconstructed Images (Epoch {epoch})', fontsize=16)
+            outputs, _ = model(distances, cosines, albedo, normals)
 
-    for i in range(num_comparisons):
-        row = i // 2
-        col = (i % 2) * 2
+            # Convert tensors to numpy arrays
+            originals = targets.cpu().numpy()
+            reconstructed = outputs.cpu().numpy()
 
-        # Original image
-        axes[row, col].imshow(originals[i])
-        axes[row, col].set_title('Original', fontsize=10)
-        axes[row, col].axis('off')
+            # Calculate number of rows needed
+            num_rows = math.ceil(min(num_samples, originals.shape[0]) / 2)
 
-        # Reconstructed image
-        axes[row, col+1].imshow(reconstructed[i])
-        axes[row, col+1].set_title('Reconstructed', fontsize=10)
-        axes[row, col+1].axis('off')
+            # Create a single figure for all samples
+            fig, axes = plt.subplots(num_rows, 4, figsize=(20, 5*num_rows))
+            fig.suptitle(f'Comparison at Epoch {epoch}', fontsize=16)
 
-    # Hide unused subplots
-    for i in range(num_comparisons, num_rows * 2):
-        row = i // 2
-        col = (i % 2) * 2
-        axes[row, col].axis('off')
-        axes[row, col+1].axis('off')
+            for i in range(min(num_samples, originals.shape[0])):
+                row = i // 2
+                col = (i % 2) * 2
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to accommodate suptitle
-    plt.savefig(os.path.join(model_save_path, f'comparisons_epoch_{epoch}.png'), dpi=300, bbox_inches='tight')
-    plt.close(fig)
+                # Normalize and convert original image from BGR to RGB
+                original_img = originals[i]
+                original_img = (original_img - original_img.min()) / (original_img.max() - original_img.min())
+                original_img = original_img[..., ::-1]  # BGR to RGB
+
+                # Normalize and convert reconstructed image from BGR to RGB
+                reconstructed_img = reconstructed[i]
+                reconstructed_img = (reconstructed_img - reconstructed_img.min()) / (reconstructed_img.max() - reconstructed_img.min())
+                reconstructed_img = reconstructed_img[..., ::-1]  # BGR to RGB
+
+                # Plot original image
+                axes[row, col].imshow(original_img)
+                axes[row, col].set_title(f'Original {i+1}')
+                axes[row, col].axis('off')
+
+                # Plot reconstructed image
+                axes[row, col+1].imshow(reconstructed_img)
+                axes[row, col+1].set_title(f'Reconstructed {i+1}')
+                axes[row, col+1].axis('off')
+
+            # Remove any unused subplots
+            for i in range(min(num_samples, originals.shape[0]), num_rows*2):
+                row = i // 2
+                col = (i % 2) * 2
+                axes[row, col].axis('off')
+                axes[row, col+1].axis('off')
+
+            plt.tight_layout()
+            plt.savefig(os.path.join(model_save_path, f'comparison_epoch_{epoch}.png'), dpi=300, bbox_inches='tight')
+            plt.close(fig)
+
+            break  # Only process one batch
+
+def plot_losses(train_losses, val_losses, epoch, model_save_path):
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'Training and Validation Losses up to Epoch {epoch}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch}.png'), dpi=300, bbox_inches='tight')
+    plt.close()
 
 def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path='.'):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     criterion = CombinedLoss().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=params.LEARNING_RATE)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
     best_val_loss = float('inf')
 
-    # For live plotting
     train_losses = []
     val_losses = []
-    epochs = []
-    
-
-    # For accumulating comparison images
-    all_originals = []
-    all_reconstructed = []
-    comparison_epochs = []
 
     for epoch in range(num_epochs):
         model.train()
@@ -377,40 +444,28 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
 
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
-        
-        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
 
-        # Update plot data
-        epochs.append(epoch + 1)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         
-        # Save comparison plots every nth epochs
+        print("Epoch {}/{}, Train Loss: {:.4f}, Val Loss: {:.4f}".format(
+            epoch+1, num_epochs, train_loss, val_loss))
+        
+        # Save comparison images every N epochs
         if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
-            # Create and show the loss plot
-            plt.figure(figsize=(10, 6))
-            plt.plot(epochs, train_losses, 'b-', label='Train Loss')
-            plt.plot(epochs, val_losses, 'r-', label='Validation Loss')
-            plt.xlabel('Epoch')
-            plt.ylabel('Loss')
-            plt.title('Training and Validation Loss')
-            plt.legend()
-            plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch+1}.png'))
-            plt.close()
-
-            # Generate and plot comparisons for current epoch only
-            originals, reconstructed = visualize_comparisons(model, val_loader, device, params.SAMPLE_NUMBER_OF_COMPARISONS)
-            plot_comparisons(originals, reconstructed, epoch+1, model_save_path)
+            save_comparison_images(model, val_loader, device, epoch + 1, model_save_path)
+            plot_losses(train_losses, val_losses, epoch + 1, model_save_path)
 
         scheduler.step(val_loss)
 
         # Save model every N epochs
         if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
-            save_path = os.path.join(model_save_path, f'relighting_model_epoch_{epoch+1}.pth')
+            save_path = os.path.join(model_save_path, 'relighting_model_epoch_{}.pth'.format(epoch+1))
             torch.save(model.state_dict(), save_path)
-            print(f"Model saved at epoch {epoch+1}")
+            print("Model saved at epoch {}".format(epoch+1))
 
     return model
+
 
 def prepare_data(distances, cosines, albedo, normals, targets):
     # Splitting the data
@@ -456,12 +511,13 @@ def prepare_data(distances, cosines, albedo, normals, targets):
     )
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=params.BATCH_SIZE, shuffle=params.TRAIN_SHUFFLE, num_workers=params.NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, batch_size=params.BATCH_SIZE, shuffle=params.VAL_SHUFFLE, num_workers=params.NUM_WORKERS)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=14)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=14)
 
     return train_loader, val_loader, train_indices, val_indices
 
 def train(distances, cosines, albedo, normals, targets):
+    print("Going to train..")
     distances = np.transpose(distances, (0,1,3,2))
     cosines = np.transpose(cosines, (0,1,3,2))
 
@@ -472,16 +528,19 @@ def train(distances, cosines, albedo, normals, targets):
     os.makedirs(model_save_path, exist_ok=True)
 
     # Prepare data
+    print("Preparing data..")
     train_loader, val_loader, train_indices, val_indices = prepare_data(distances, cosines, albedo, normals, targets)
 
     np.save(os.path.join(model_save_path, 'train_indices.npy'), train_indices)
     np.save(os.path.join(model_save_path, 'val_indices.npy'), val_indices)
 
     # Initialize the model
+    print("Initializing model..")
     albedo_channels = albedo.shape[-1]
     model = RelightingModel(albedo_channels=albedo_channels)
 
     # Train the model
+    print("Training the model..")
     trained_model = train_model(model, train_loader, val_loader, num_epochs=params.RTI_NET_EPOCHS, model_save_path=model_save_path)
 
     # Save the final model
