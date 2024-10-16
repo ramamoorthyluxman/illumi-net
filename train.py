@@ -1,3 +1,4 @@
+# Train.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -37,8 +38,8 @@ class CombinedLoss(nn.Module):
         super(CombinedLoss, self).__init__()
         self.mse_loss = nn.MSELoss()
         self.perceptual_loss = PerceptualLoss()
-        self.lambda_mse = lambda_mse
-        self.lambda_perceptual = lambda_perceptual
+        self.lambda_mse = params.LAMBDA_MSE
+        self.lambda_perceptual = params.LAMDA_PERCEPTUAL
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     def forward(self, output, target):
@@ -402,7 +403,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     criterion = CombinedLoss().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=params.LEARNING_RATE)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
     best_val_loss = float('inf')
@@ -511,8 +512,20 @@ def prepare_data(distances, cosines, albedo, normals, targets):
     )
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=14)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=14)
+    train_loader = DataLoader(train_dataset, 
+                              batch_size=params.BATCH_SIZE, 
+                              shuffle=params.TRAIN_SHUFFLE, 
+                              num_workers=params.NUM_WORKERS,
+                              persistent_workers=params.PERSISTENT_WORKER,
+                              pin_memory=params.PIN_MEMORY,
+                              prefetch_factor=params.PREFETCH_FACTOR)
+    val_loader = DataLoader(val_dataset, 
+                            batch_size=params.BATCH_SIZE, 
+                            shuffle=params.VAL_SHUFFLE, 
+                            num_workers=params.NUM_WORKERS,
+                            persistent_workers=params.PERSISTENT_WORKER,
+                            pin_memory=params.PIN_MEMORY,
+                            prefetch_factor=params.PREFETCH_FACTOR)
 
     return train_loader, val_loader, train_indices, val_indices
 

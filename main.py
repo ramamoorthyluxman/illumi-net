@@ -2,8 +2,9 @@ import importlib
 from utils import params
 from utils import dataset
 import os
-import train
 import numpy as np
+import train
+import relight
 
 data_ = dataset(params.ACQ_PATHS)
 
@@ -13,4 +14,15 @@ print("Surface albedos shape: ", data_.surface_albedos.shape)
 print("Surface normals shape: ", data_.surface_normals.shape)
 print("Images shape: ", data_.images.shape)
 
-train = train.train(data_.distance_matrices, data_.cosine_matrices, data_.surface_albedos, data_.surface_normals, data_.images)
+# train = train.train(distances=data_.distance_matrices, 
+#                     cosines=data_.cosine_matrices, 
+#                     albedo=data_.surface_albedos, 
+#                     normals=data_.surface_normals, 
+#                     targets=data_.images)
+
+relight = relight.relight(model_path=params.RTI_MODEL_PATH, 
+                          distances=data_.distance_matrices, 
+                          cosines=data_.cosine_matrices, 
+                          albedo=data_.surface_albedos, 
+                          normals=data_.surface_normals, 
+                          output_dir='/work/imvia/ra7916lu/illumi-net/data/2024_02_22_1_1/rti_sub_images/reconstructed')
