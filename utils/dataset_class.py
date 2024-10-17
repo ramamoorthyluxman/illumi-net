@@ -7,6 +7,8 @@ from . import params
 import cv2
 import random
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+
 
 # Convert Cartesian coordinates to spherical coordinates    
 def Cartesian2spherical3D(x, y, z):
@@ -59,16 +61,21 @@ class dataset:
         self.lp_files, errors = ([path for folder in self.acqs for path in glob.glob(os.path.join(folder, "*.lp"))], [f"Error: No .lp file found in {folder}" for folder in self.acqs if not glob.glob(os.path.join(folder, "*.lp"))])
         print(errors)
 
-        self.load_lps_and_img_paths()
+        # If training you pick randomly the desired number of samples. For relight, you consider whatever distances and cosines you pass. 
+        if params.TRAINING:
+            self.load_lps_and_img_paths()
 
-        for i in range(len(self.acqs)):
-            self.rand_indices.append(random.sample(range(len(self.lps_cartesian[i])), min(len(self.lps_cartesian[i]), params.MAX_NB_IMAGES_PER_ACQ)))
+        # If training you pick randomly the desired number of samples. For relight, you consider whatever distances and cosines you pass. 
+        if params.TRAINING:
+            for i in range(len(self.acqs)):
+                self.rand_indices.append(random.sample(range(len(self.lps_cartesian[i])), min(len(self.lps_cartesian[i]), params.MAX_NB_IMAGES_PER_ACQ)))
 
         if params.COMPUTE_NORMALS_AND_ALBEDO:
             self.computed_normals_and_albedos()
 
         if params.COMPUTE_DISTANCES_AND_COSINES:
             self.compute_distances_and_cosines()
+            
 
         print("Loading distance matrices and cosine matrices...")
         self.load_distance_matrices()
@@ -76,8 +83,15 @@ class dataset:
         print("loading surface normals and albedos...")
         self.load_surface_normals()
         self.load_surface_albedos()
-        print("Loading images...")
-        self.load_images()
+        # You load the target images only for training. For relighting - you create new images
+        if params.TRAINING:
+            print("Loading images...")
+            self.load_images()
+
+        if params.CREATE_DIST_COSINES_HEATMAPS:
+            print("Generating distance heatmaps..")
+            self.create_and_save_heatmaps()
+        
     
     def load_images(self):
         for i in tqdm(range(len(self.acqs)), desc="Loading acquisitions", unit="acq"):
@@ -177,12 +191,81 @@ class dataset:
     def load_distance_matrices(self):
         for idx, acq in enumerate(self.acqs):
             distance_matrix = np.load(os.path.join(acq, "distance_matrices.npy"))
-            self.distance_matrices.append(distance_matrix[self.rand_indices[idx], :, :])                
+            # If training you pick randomly the desired number of samples. For relight, you consider all distances and cosines. 
+            if params.TRAINING:
+                self.distance_matrices.append(distance_matrix[self.rand_indices[idx], :, :])                
+            else:
+                self.distance_matrices.append(distance_matrix)
 
         self.distance_matrices = np.array(self.distance_matrices)
                                                     
     def load_cosine_matrices(self):
         for idx, acq in enumerate(self.acqs):
             cosine_matrix = np.load(os.path.join(acq, "angles_matrices.npy"))
-            self.cosine_matrices.append(cosine_matrix[self.rand_indices[idx], :, :])
+            # If training you pick randomly the desired number of samples. For relight, you consider all distances and cosines.
+            if params.TRAINING:
+                self.cosine_matrices.append(cosine_matrix[self.rand_indices[idx], :, :])
+            else:
+                self.cosine_matrices.append(cosine_matrix)
         self.cosine_matrices = np.array(self.cosine_matrices)
+
+    def create_and_save_heatmaps(self):
+        print("Creating and saving heatmaps with corresponding images and light positions...")
+
+        for i in tqdm(range(len(self.acqs)), desc="Processing acquisitions", unit="acq"):
+            # Create folder for the heatmaps if it doesn't exist
+            heatmap_folder = os.path.join(self.acqs[i], "distance_heatmaps")
+            os.makedirs(heatmap_folder, exist_ok=True)
+
+            for j, idx in enumerate(tqdm(self.rand_indices[i],
+                                        desc=f"Processing images for acq {i+1}/{len(self.acqs)}",
+                                        leave=False, unit="img", total=len(self.rand_indices[i]))):
+                # Load the distance matrix, corresponding image, and light position
+                distance_matrix = self.distance_matrices[i][idx]
+                image = self.images[i][idx]
+                light_position = np.array(self.lps_cartesian[i][idx], dtype=float)
+
+                # Normalize the light position to the given radius
+                r = self.lps_spherical[i][idx][0]
+                light_position = r * light_position / np.linalg.norm(light_position)
+
+                # Create the plot with three subplots
+                fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+
+                # Plot the distance heatmap
+                im1 = ax1.imshow(distance_matrix, cmap='viridis', aspect='auto')
+                ax1.set_title("Distance Heatmap")
+                ax1.axis('off')
+                fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+
+                # Plot the corresponding image
+                ax2.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), aspect='auto')
+                ax2.set_title("Corresponding Image")
+                ax2.axis('off')
+
+                # Plot the light position in 2D projection of Cartesian coordinates
+                ax3.set_xlim(-r, r)
+                ax3.set_ylim(-r, r)
+                ax3.set_aspect('equal')
+                ax3.set_title(f"Light Position: {[round(val, 2) for val in self.lps_cartesian[i][idx]], [round(val, 2) for val in self.lps_spherical[i][idx]]}")
+                ax3.set_xlabel("X")
+                ax3.set_ylabel("Y")
+
+                # Draw the hemisphere boundary
+                circle = plt.Circle((0, 0), r, fill=False, color='black')
+                ax3.add_artist(circle)
+
+                # Project and plot the light position
+                x, y, z = light_position
+                ax3.scatter(x, y, color='red', s=50)
+
+                # Add gridlines
+                ax3.grid(True)
+
+                # Save the figure
+                plt.tight_layout()
+                save_path = os.path.join(heatmap_folder, f"heatmap_image_light_{idx}.png")
+                plt.savefig(save_path, bbox_inches='tight', pad_inches=0.1)
+                plt.close()
+
+        print("Heatmaps, corresponding images, and light positions saved successfully.")

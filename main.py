@@ -14,15 +14,17 @@ print("Surface albedos shape: ", data_.surface_albedos.shape)
 print("Surface normals shape: ", data_.surface_normals.shape)
 print("Images shape: ", data_.images.shape)
 
-# train = train.train(distances=data_.distance_matrices, 
-#                     cosines=data_.cosine_matrices, 
-#                     albedo=data_.surface_albedos, 
-#                     normals=data_.surface_normals, 
-#                     targets=data_.images)
+# if params.TRAINING:
+#     train = train.train(distances=data_.distance_matrices, 
+#                         cosines=data_.cosine_matrices, 
+#                         albedo=data_.surface_albedos, 
+#                         normals=data_.surface_normals, 
+#                         targets=data_.images)
 
-relight = relight.relight(model_path=params.RTI_MODEL_PATH, 
-                          distances=data_.distance_matrices, 
-                          cosines=data_.cosine_matrices, 
-                          albedo=data_.surface_albedos, 
-                          normals=data_.surface_normals, 
-                          output_dir='/work/imvia/ra7916lu/illumi-net/data/2024_02_22_1_1/rti_sub_images/reconstructed')
+# else:
+#     relight = relight.relight(model_path=params.RTI_MODEL_PATH, 
+#                             distances=data_.distance_matrices, 
+#                             cosines=data_.cosine_matrices, 
+#                             albedo=data_.surface_albedos, 
+#                             normals=data_.surface_normals, 
+#                             output_dir='/work/imvia/ra7916lu/illumi-net/data/2024_02_22_1_1/rti_sub_images/reconstructed')

@@ -32,14 +32,12 @@ def save_images(images, output_dir, acq_idx):
     acq_dir = os.path.join(output_dir, f'acquisition_{acq_idx}')
     os.makedirs(acq_dir, exist_ok=True)
     
-    for i, image in enumerate(images):
-        image_clip =  np.clip(image, 0, 255)
-        # Save the image
-        cv2.imwrite(os.path.join(acq_dir, f'relit_image_{i}.png'),image_clip)
+    for i, image in enumerate(images):    
+        cv2.imwrite(os.path.join(acq_dir, f'relit_image_{i}.png'),image)
 
 def relight(model_path, distances, cosines, albedo, normals, output_dir):
-    distances = np.transpose(distances, (0,1,3,2))
-    cosines = np.transpose(cosines, (0,1,3,2))
+    # distances = np.transpose(distances, (0,1,3,2))
+    # cosines = np.transpose(cosines, (0,1,3,2))
     albedo_channels = albedo.shape[-1]
     model = load_model(model_path, albedo_channels)
     

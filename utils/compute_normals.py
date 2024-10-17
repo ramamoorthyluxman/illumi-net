@@ -85,7 +85,8 @@ class PhotometricStereo_traditional:
         normal_map = (self.normal_map + 1) / 2  # Convert from [-1, 1] to [0, 1]
         normal_map = (normal_map * 255).astype(np.uint8)
         cv2.imwrite(os.path.join(output_dir, 'normal_map.png'), cv2.cvtColor(normal_map, cv2.COLOR_RGB2BGR))
-        print("Saved normal map to:", os.path.join(output_dir, 'normal_map.png'))
+        np.save(os.path.join(output_dir, 'normal_map.npy'), self.normal_map)
+        print("Saved normal map to:", os.path.join(output_dir, 'normal_map.png and normal_map.npy'))
 
         # Save albedo map
         albedo_normalized = (self.albedo_map - self.albedo_map.min()) / (self.albedo_map.max() - self.albedo_map.min())
