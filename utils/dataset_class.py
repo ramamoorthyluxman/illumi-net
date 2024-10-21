@@ -233,7 +233,7 @@ class dataset:
                 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
 
                 # Plot the distance heatmap
-                im1 = ax1.imshow(distance_matrix, cmap='viridis', aspect='auto')
+                im1 = ax1.imshow(distance_matrix, cmap='viridis_r', aspect='auto')
                 ax1.set_title("Distance Heatmap")
                 ax1.axis('off')
                 fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
