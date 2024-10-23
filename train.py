@@ -12,6 +12,70 @@ import os
 import matplotlib.pyplot as plt
 import torchvision.models as models
 import torchvision.transforms as transforms
+import subprocess
+import sys
+from datetime import datetime
+
+# Set visible GPUs
+os.environ["CUDA_VISIBLE_DEVICES"] = params.CUDA_VISIBLE_DEVICES  # Modify this according to your needs
+
+def get_gpu_memory_stats():
+    """
+    Get the GPU memory usage stats using nvidia-smi
+    Returns a string with memory usage info for each GPU
+    """
+    if not torch.cuda.is_available():
+        return "GPU not available"
+    
+    try:
+        gpu_stats = []
+        for i in range(torch.cuda.device_count()):
+            # Get memory usage in MB
+            allocated = torch.cuda.memory_allocated(i) / 1024**2
+            cached = torch.cuda.memory_reserved(i) / 1024**2
+            
+            # Get device properties
+            prop = torch.cuda.get_device_properties(i)
+            total_memory = prop.total_memory / 1024**2
+            
+            gpu_stats.append(f"GPU {i} ({prop.name}): "
+                           f"{allocated:.1f}MB allocated, "
+                           f"{cached:.1f}MB cached, "
+                           f"{total_memory:.1f}MB total")
+    except Exception as e:
+        return f"Error getting GPU stats: {str(e)}"
+    
+    return "\n".join(gpu_stats)
+
+def get_gpu_utilization():
+    """
+    Get GPU utilization using nvidia-smi
+    Returns utilization percentage for each GPU
+    """
+    try:
+        result = subprocess.check_output(
+            ['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+            encoding='utf-8'
+        )
+        utils = [int(x) for x in result.strip().split('\n')]
+        return [f"GPU {i}: {util}%" for i, util in enumerate(utils)]
+    except:
+        return ["Could not get GPU utilization"]
+
+def print_gpu_stats(epoch, batch_idx, num_batches):
+    """
+    Print comprehensive GPU statistics
+    """
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("\n" + "="*80)
+    print(f"GPU Stats at {current_time} (Epoch {epoch+1}, Batch {batch_idx}/{num_batches})")
+    print("-"*80)
+    print("Memory Usage:")
+    print(get_gpu_memory_stats())
+    print("\nGPU Utilization:")
+    print("\n".join(get_gpu_utilization()))
+    print("="*80 + "\n")
+
 
 class PerceptualLoss(nn.Module):
     def __init__(self):
@@ -64,29 +128,49 @@ class CombinedLoss(nn.Module):
 
 class PatchRelightingDataset(Dataset):
     def __init__(self, distances, cosines, albedo, normals, targets):
+        # Convert inputs to numpy arrays if they aren't already
+        distances = np.array(distances)
+        cosines = np.array(cosines)
+        albedo = np.array(albedo)
+        normals = np.array(normals)
+        targets = np.array(targets)
+        
+        # Validate input shapes
+        K, N, H, W = distances.shape
+        assert cosines.shape == (K, N, H, W), f"Cosines shape {cosines.shape} doesn't match distances shape {distances.shape}"
+        assert albedo.shape == (K, H, W, 3), f"Albedo shape {albedo.shape} doesn't match expected shape {(K, H, W, 3)}"
+        assert normals.shape == (K, H, W, 3), f"Normals shape {normals.shape} doesn't match expected shape {(K, H, W, 3)}"
+        assert targets.shape == (K, N, H, W, 3), f"Targets shape {targets.shape} doesn't match expected shape {(K, N, H, W, 3)}"
+        
+        # Convert to torch tensors
         self.distances = torch.FloatTensor(distances)
         self.cosines = torch.FloatTensor(cosines)
         self.albedo = torch.FloatTensor(albedo)
         self.normals = torch.FloatTensor(normals)
         self.targets = torch.FloatTensor(targets)
+        
+        # Calculate patch size and number of patches
         self.patch_size, self.patches_per_image = self.calculate_patches() 
         print("Adjusted patch size, number of patches: ", self.patch_size, self.patches_per_image)       
+        
+        # Create patches list
         self.patches = self._create_patches()  
+        print(f"Created {len(self.patches)} total patches")
 
     def calculate_patches(self):
         print("Calculating the patches")
         patch_height, patch_width = params.RTI_NET_PATCH_SIZE
         desired_patches = params.RTI_MAX_NUMBER_PATCHES
         _, _, image_height, image_width = self.distances.shape
-        # Ensure patch sizes are not larger than image dimensions
+        
+        # Ensure patch sizes are not larger than image dimensions and are divisible by 32
         patch_height = min(patch_height, image_height)
         patch_width = min(patch_width, image_width)
+        patch_height = (patch_height // 32) * 32
+        patch_width = (patch_width // 32) * 32
         
-        # Adjust patch sizes to ensure they divide image dimensions perfectly
-        while image_height % patch_height != 0:
-            patch_height -= 1
-        while image_width % patch_width != 0:
-            patch_width -= 1
+        # Ensure patches are not zero-sized
+        assert patch_height > 0 and patch_width > 0, f"Invalid patch size: {patch_height}x{patch_width}"
         
         # Calculate maximum possible patches
         max_patches_y = image_height // patch_height
@@ -95,20 +179,14 @@ class PatchRelightingDataset(Dataset):
         
         # Adjust desired patches if it exceeds maximum possible
         adjusted_patches = min(desired_patches, max_patches)
+        assert adjusted_patches > 0, "No valid patches could be created"
         
-        # Calculate actual number of patches in each dimension
-        patches_y = min(adjusted_patches, max_patches_y)
-        patches_x = min(adjusted_patches // patches_y, max_patches_x)
-        
-        # Recalculate total patches
-        total_patches = patches_y * patches_x
-        
-        return [patch_height, patch_width], total_patches
+        return [patch_height, patch_width], adjusted_patches
 
     def _create_patches(self):
         patches = []
         K, N, H, W = self.distances.shape
-        grid_size = math.isqrt(self.patches_per_image)  # Square root of patches_per_image
+        grid_size = math.isqrt(self.patches_per_image)
         cell_h, cell_w = H // grid_size, W // grid_size
         
         for k in range(K):
@@ -124,28 +202,57 @@ class PatchRelightingDataset(Dataset):
                     w_start = j * cell_w
                     w_end = min((j + 1) * cell_w, W) - self.patch_size[1]
                     
+                    # Ensure valid ranges
+                    h_start = max(0, h_start)
+                    h_end = max(h_start, h_end)
+                    w_start = max(0, w_start)
+                    w_end = max(w_start, w_end)
+                    
                     # Randomly select a patch within this grid cell
-                    h = random.randint(h_start, max(h_start, h_end))
-                    w = random.randint(w_start, max(w_start, w_end))
+                    h = random.randint(h_start, h_end)
+                    w = random.randint(w_start, w_end)
                     
                     patches.append((k, n, h, w))
         
+        # Verify we have patches
+        assert len(patches) > 0, "No patches were created"
         return patches
 
     def __len__(self):
+        """Return the total number of patches"""
         return len(self.patches)
 
     def __getitem__(self, idx):
+        """Get a specific patch by index"""
+        if idx >= len(self.patches):
+            raise IndexError(f"Index {idx} out of bounds for dataset with {len(self.patches)} patches")
+            
         k, n, i, j = self.patches[idx]
         patch_slice = slice(i, i + self.patch_size[0]), slice(j, j + self.patch_size[1])
-
-        return {
-            'distances': self.distances[k, n][patch_slice],
-            'cosines': self.cosines[k, n][patch_slice],
-            'albedo': self.albedo[k][patch_slice],
-            'normals': self.normals[k][patch_slice],
-            'target': self.targets[k, n][patch_slice]
-        }
+        
+        try:
+            item = {
+                'distances': self.distances[k, n][patch_slice],
+                'cosines': self.cosines[k, n][patch_slice],
+                'albedo': self.albedo[k][patch_slice],
+                'normals': self.normals[k][patch_slice],
+                'target': self.targets[k, n][patch_slice]
+            }
+            
+            # Validate output shapes
+            pH, pW = self.patch_size
+            assert item['distances'].shape == (pH, pW), f"Invalid distances shape: {item['distances'].shape}"
+            assert item['cosines'].shape == (pH, pW), f"Invalid cosines shape: {item['cosines'].shape}"
+            assert item['albedo'].shape == (pH, pW, 3), f"Invalid albedo shape: {item['albedo'].shape}"
+            assert item['normals'].shape == (pH, pW, 3), f"Invalid normals shape: {item['normals'].shape}"
+            assert item['target'].shape == (pH, pW, 3), f"Invalid target shape: {item['target'].shape}"
+            
+            return item
+            
+        except Exception as e:
+            print(f"Error getting item {idx}: {e}")
+            print(f"Patch info - k: {k}, n: {n}, i: {i}, j: {j}")
+            raise e
 
 class ResidualBlock2D(nn.Module):
     def __init__(self, in_channels, out_channels, dilation=1):
@@ -216,9 +323,18 @@ class RelightingModel(nn.Module):
         self.final_conv = nn.Conv2d(128, 3, kernel_size=1)
         
         self.pool = nn.MaxPool2d(2)
-        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.upsample = nn.Upsample(size=None, scale_factor=2, mode='bilinear', align_corners=True)
+
+    def ensure_size_match(self, x, target):
+        """Ensure x matches target size"""
+        if x.shape[2:] != target.shape[2:]:
+            x = nn.functional.interpolate(x, size=target.shape[2:], mode='bilinear', align_corners=True)
+        return x
 
     def forward(self, distances, cosines, albedo, normals):
+        # Store original size
+        original_size = (distances.shape[1], distances.shape[2])
+        
         # Reshape inputs to add channel dimension
         distances = distances.unsqueeze(1)
         cosines = cosines.unsqueeze(1)
@@ -242,13 +358,22 @@ class RelightingModel(nn.Module):
         # Bridge
         bridge = self.bridge(e4)
         
-        # Decoder
-        d3 = self.decoder3(torch.cat([self.upsample(bridge), e3], dim=1))
-        d2 = self.decoder2(torch.cat([self.upsample(d3), e2], dim=1))
-        d1 = self.decoder1(torch.cat([self.upsample(d2), e1], dim=1))
+        # Decoder with size matching
+        d3_up = self.upsample(bridge)
+        d3_up = self.ensure_size_match(d3_up, e3)
+        d3 = self.decoder3(torch.cat([d3_up, e3], dim=1))
         
-        # Output
+        d2_up = self.upsample(d3)
+        d2_up = self.ensure_size_match(d2_up, e2)
+        d2 = self.decoder2(torch.cat([d2_up, e2], dim=1))
+        
+        d1_up = self.upsample(d2)
+        d1_up = self.ensure_size_match(d1_up, e1)
+        d1 = self.decoder1(torch.cat([d1_up, e1], dim=1))
+        
+        # Output with size matching to input
         out = self.final_conv(d1)
+        out = nn.functional.interpolate(out, size=original_size, mode='bilinear', align_corners=True)
         
         # Reshape the output to match the target shape (N, H, W, 3)
         out = out.permute(0, 2, 3, 1)
@@ -400,7 +525,16 @@ def plot_losses(train_losses, val_losses, epoch, model_save_path):
     plt.close()
 
 def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path='.'):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Check if CUDA is available
+    if torch.cuda.is_available():
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        # Use DataParallel if multiple GPUs are available
+        if torch.cuda.device_count() > 1:
+            model = nn.DataParallel(model)
+        device = torch.device("cuda")        
+    else:
+        print("Using CPU")
+        device = torch.device("cpu")
     model = model.to(device)
     criterion = CombinedLoss().to(device)
     optimizer = optim.Adam(model.parameters(), lr=params.LEARNING_RATE)
@@ -414,7 +548,11 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
-        for batch in train_loader:
+
+        # Print GPU stats at the start of each epoch
+        print_gpu_stats(epoch, 0, len(train_loader))
+
+        for batch_idx, batch in enumerate(train_loader):
             distances = batch['distances'].to(device)
             cosines = batch['cosines'].to(device)
             albedo = batch['albedo'].to(device)
@@ -427,6 +565,14 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
+
+            # # Print GPU stats every N batches
+            # if batch_idx % params.BATCH_SIZE == 0:  # Adjust frequency as needed
+            #     print_gpu_stats(epoch, batch_idx, len(train_loader))
+                
+            # # Clear cache periodically if needed
+            # if batch_idx % params.BATCH_SIZE == 0:  # Adjust frequency as needed
+            #     torch.cuda.empty_cache()
 
         # Validation
         model.eval()
@@ -530,9 +676,13 @@ def prepare_data(distances, cosines, albedo, normals, targets):
     return train_loader, val_loader, train_indices, val_indices
 
 def train(distances, cosines, albedo, normals, targets):
-    print("Going to train..")
-    distances = np.transpose(distances, (0,1,3,2))
-    cosines = np.transpose(cosines, (0,1,3,2))
+    print("Going to train..")    
+    
+    distances = np.array(distances)
+    cosines = np.array(cosines)
+    albedo = np.array(albedo)
+    normals = np.array(normals)
+    targets = np.array(targets)
 
     print("Input shapes - distances: ", distances.shape, "cosines: ", cosines.shape, 
           "albedo: ", albedo.shape, "normals: ", normals.shape, "targets: ", targets.shape)

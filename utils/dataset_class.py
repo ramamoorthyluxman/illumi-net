@@ -70,10 +70,10 @@ class dataset:
             for i in range(len(self.acqs)):
                 self.rand_indices.append(random.sample(range(len(self.lps_cartesian[i])), min(len(self.lps_cartesian[i]), params.MAX_NB_IMAGES_PER_ACQ)))
 
-        if params.COMPUTE_NORMALS_AND_ALBEDO:
+        if params.COMPUTE_NORMALS_AND_ALBEDO and params.TRAINING:
             self.computed_normals_and_albedos()
 
-        if params.COMPUTE_DISTANCES_AND_COSINES:
+        if params.COMPUTE_DISTANCES_AND_COSINES and params.TRAINING:
             self.compute_distances_and_cosines()
             
 
@@ -160,10 +160,11 @@ class dataset:
                 h, w, _ = img_shape
                 surface_width, surface_height = params.SURFACE_PHYSCIAL_SIZE
                 x = np.linspace(-surface_width / 2, surface_width / 2, w)
-                y = np.linspace(-surface_height / 2, surface_height / 2, h)
-                X, Y = np.meshgrid(y, x)
+                y = np.linspace(surface_height / 2, -surface_height / 2, h)
+                X, Y = np.meshgrid(x, y)
                 Z = np.zeros_like(X)        
                 distances = np.sqrt((X - self.lps_cartesian[i][j][0])**2 + (Y - self.lps_cartesian[i][j][1])**2 + (Z - self.lps_cartesian[i][j][2])**2)
+                distances = distances**2
                 # Ensure that the angle calculation is safe for arccos
                 cos_theta = np.clip(-self.lps_cartesian[i][j][2] / distances, -1.0, 1.0)
                 angles = np.arccos(cos_theta)
@@ -187,26 +188,21 @@ class dataset:
                 albedo = albedo[..., np.newaxis]
             self.surface_albedos.append(albedo)
         self.surface_albedos = np.array(self.surface_albedos)
-                                                
-    def load_distance_matrices(self):
-        for idx, acq in enumerate(self.acqs):
-            distance_matrix = np.load(os.path.join(acq, "distance_matrices.npy"))
-            # If training you pick randomly the desired number of samples. For relight, you consider all distances and cosines. 
-            if params.TRAINING:
-                self.distance_matrices.append(distance_matrix[self.rand_indices[idx], :, :])                
-            else:
-                self.distance_matrices.append(distance_matrix)
 
+    def load_distance_matrices(self):
+        for i in tqdm(range(len(self.acqs)), desc="Loading acquisitions", unit="acq"):
+            acq_distance_matrices = np.load(os.path.join(self.acqs[i], "distance_matrices.npy"))
+            if len(self.rand_indices)==0:
+                for i in range(len(self.acqs)):
+                    self.rand_indices.append(random.sample(range(acq_distance_matrices.shape[0]), min(acq_distance_matrices.shape[0], params.MAX_NB_IMAGES_PER_ACQ)))
+            self.distance_matrices.append(acq_distance_matrices[self.rand_indices[i]])
         self.distance_matrices = np.array(self.distance_matrices)
-                                                    
+            
     def load_cosine_matrices(self):
-        for idx, acq in enumerate(self.acqs):
-            cosine_matrix = np.load(os.path.join(acq, "angles_matrices.npy"))
-            # If training you pick randomly the desired number of samples. For relight, you consider all distances and cosines.
-            if params.TRAINING:
-                self.cosine_matrices.append(cosine_matrix[self.rand_indices[idx], :, :])
-            else:
-                self.cosine_matrices.append(cosine_matrix)
+        for i in tqdm(range(len(self.acqs)), desc="Loading acquisitions", unit="acq"):
+
+            acq_cosine_matrices = np.load(os.path.join(self.acqs[i], "angles_matrices.npy"))
+            self.cosine_matrices.append(acq_cosine_matrices[self.rand_indices[i]])
         self.cosine_matrices = np.array(self.cosine_matrices)
 
     def create_and_save_heatmaps(self):
@@ -214,15 +210,16 @@ class dataset:
 
         for i in tqdm(range(len(self.acqs)), desc="Processing acquisitions", unit="acq"):
             # Create folder for the heatmaps if it doesn't exist
-            heatmap_folder = os.path.join(self.acqs[i], "distance_heatmaps")
+            heatmap_folder = os.path.join(self.acqs[i], "distances_cosines_heatmaps")
             os.makedirs(heatmap_folder, exist_ok=True)
 
             for j, idx in enumerate(tqdm(self.rand_indices[i],
                                         desc=f"Processing images for acq {i+1}/{len(self.acqs)}",
                                         leave=False, unit="img", total=len(self.rand_indices[i]))):
                 # Load the distance matrix, corresponding image, and light position
-                distance_matrix = self.distance_matrices[i][idx]
-                image = self.images[i][idx]
+                distance_matrix = self.distance_matrices[i][j]
+                cosine_matrix = self.cosine_matrices[i][j]
+                image = self.images[i][j]
                 light_position = np.array(self.lps_cartesian[i][idx], dtype=float)
 
                 # Normalize the light position to the given radius
@@ -230,37 +227,42 @@ class dataset:
                 light_position = r * light_position / np.linalg.norm(light_position)
 
                 # Create the plot with three subplots
-                fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-
+                fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(24, 6))
                 # Plot the distance heatmap
                 im1 = ax1.imshow(distance_matrix, cmap='viridis_r', aspect='auto')
                 ax1.set_title("Distance Heatmap")
                 ax1.axis('off')
                 fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
 
-                # Plot the corresponding image
-                ax2.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), aspect='auto')
-                ax2.set_title("Corresponding Image")
+                # Plot the cosine heatmap
+                im2 = ax2.imshow(cosine_matrix, cmap='viridis_r', aspect='auto')
+                ax2.set_title("Cosine Heatmap")
                 ax2.axis('off')
+                fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+
+                # Plot the corresponding image
+                ax3.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), aspect='auto')
+                ax3.set_title("Corresponding Image")
+                ax3.axis('off')
 
                 # Plot the light position in 2D projection of Cartesian coordinates
-                ax3.set_xlim(-r, r)
-                ax3.set_ylim(-r, r)
-                ax3.set_aspect('equal')
-                ax3.set_title(f"Light Position: {[round(val, 2) for val in self.lps_cartesian[i][idx]], [round(val, 2) for val in self.lps_spherical[i][idx]]}")
-                ax3.set_xlabel("X")
-                ax3.set_ylabel("Y")
+                ax4.set_xlim(-r, r)
+                ax4.set_ylim(-r, r)
+                ax4.set_aspect('equal')
+                ax4.set_title(f"Light Position: {[round(val, 2) for val in self.lps_cartesian[i][idx]], [round(val, 2) for val in self.lps_spherical[i][idx]]}")
+                ax4.set_xlabel("X")
+                ax4.set_ylabel("Y")
 
                 # Draw the hemisphere boundary
                 circle = plt.Circle((0, 0), r, fill=False, color='black')
-                ax3.add_artist(circle)
+                ax4.add_artist(circle)
 
                 # Project and plot the light position
                 x, y, z = light_position
-                ax3.scatter(x, y, color='red', s=50)
+                ax4.scatter(x, y, color='red', s=50)
 
                 # Add gridlines
-                ax3.grid(True)
+                ax4.grid(True)
 
                 # Save the figure
                 plt.tight_layout()
