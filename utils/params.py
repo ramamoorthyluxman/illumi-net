@@ -1,18 +1,21 @@
-ACQ_PATHS = [r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_1/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_2/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_3/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_4/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_5/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_1/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_2/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_3/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_4/images/Face_A/rti',
-             r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_5/images/Face_A/rti'
-            ]
+# ACQ_PATHS = [r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_1/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_2/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_3/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_4/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_1_5/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_1/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_2/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_3/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_4/images/Face_A/rti',
+#              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_5/images/Face_A/rti'
+#             ]
+
+ACQ_PATHS = [r'/work/imvia/ra7916lu/illumi-net/data/2024_02_22_1_1/rti_sub_images']
+             
              
             
 # Dataset params
-MAX_NB_IMAGES_PER_ACQ = 50
+MAX_NB_IMAGES_PER_ACQ = 105
 COMPUTE_NORMALS_AND_ALBEDO = False # Ensure TRAINING is True
 COMPUTE_DISTANCES_AND_COSINES = False # Ensure TRAINING is True
 CREATE_DIST_COSINES_HEATMAPS = False # Ensure TRAINING is True
@@ -31,8 +34,10 @@ PS_METHOD = "L2_SOLVER"    # Least-squares
 # RTI training
 RTI_NET_EPOCHS = 200000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 10
-RTI_NET_PATCH_SIZE = [256,256] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
+# RTI_NET_PATCH_SIZE = [256,256] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
+RTI_NET_PATCH_SIZE = [128,128] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
 RTI_MAX_NUMBER_PATCHES = 20 # Randomly choose desired number of patches from the image. 
+RTI_MAX_NUMBER_PATCHES = 1
 
 # RTI Relighting
 RTI_MODEL_PATH = r'/work/imvia/ra7916lu/illumi-net/saved_models/relighting_model_epoch_60.pth'
@@ -42,13 +47,14 @@ TRAINING = True # Training: True, Relighting: False. If you choose relighting- e
 
 
 # Model Params
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 TRAIN_SHUFFLE = True
 VAL_SHUFFLE = False
 NUM_WORKERS = 4
-LEARNING_RATE = 0.0005
-LAMBDA_MSE = 1.0
-LAMDA_PERCEPTUAL = 0.5
+LEARNING_RATE = 0.005
+LAMBDA_MSE = 0.5
+LAMBDA_PERCEPTUAL = 1.0
+LAMBDA_DETAIL = 0.8
 PERSISTENT_WORKER =True,
 PIN_MEMORY =True,
 PREFETCH_FACTOR=3

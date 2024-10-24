@@ -1,23 +1,206 @@
 # Train.py
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
-from sklearn.model_selection import train_test_split
-from utils import params
+
+# System and basic imports
+import os
+import sys
 import random
 import math
-import os
+from datetime import datetime
+import subprocess
+import shutil
+
+# Set matplotlib backend first
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+# Scientific computing imports
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+# PyTorch imports
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 import torchvision.models as models
 import torchvision.transforms as transforms
-import subprocess
-import sys
-from datetime import datetime
+
+# Local imports
+from utils import params
 
 # Set visible GPUs
 os.environ["CUDA_VISIBLE_DEVICES"] = params.CUDA_VISIBLE_DEVICES  # Modify this according to your needs
+
+class MultiHeadAttentionBlock(nn.Module):
+    def __init__(self, channels):
+        super(MultiHeadAttentionBlock, self).__init__()
+        self.channels = channels
+        self.num_heads = 8
+        self.head_dim = channels // 8
+        assert channels % self.num_heads == 0, f"Channels {channels} must be divisible by num_heads {self.num_heads}"
+        
+        # Linear projections
+        self.q_proj = nn.Conv2d(channels, channels, 1)
+        self.k_proj = nn.Conv2d(channels, channels, 1)
+        self.v_proj = nn.Conv2d(channels, channels, 1)
+        self.out_proj = nn.Conv2d(channels, channels, 1)
+        
+        # Normalization and activation
+        self.norm1 = nn.BatchNorm2d(channels)
+        self.norm2 = nn.BatchNorm2d(channels)
+        self.mlp = nn.Sequential(
+            nn.Conv2d(channels, channels * 4, 1),
+            nn.ReLU(),
+            nn.Conv2d(channels * 4, channels, 1)
+        )
+        
+    def forward(self, x):
+        b, c, h, w = x.shape
+        
+        # First normalization
+        residual = x
+        x = self.norm1(x)
+        
+        # Reshape for attention
+        q = self.q_proj(x).view(b, self.num_heads, self.head_dim, h * w)
+        k = self.k_proj(x).view(b, self.num_heads, self.head_dim, h * w)
+        v = self.v_proj(x).view(b, self.num_heads, self.head_dim, h * w)
+        
+        # Transpose for matrix multiplication
+        q = q.transpose(-2, -1)  # B, num_heads, H*W, head_dim
+        k = k.transpose(-2, -1)  # B, num_heads, H*W, head_dim
+        v = v.transpose(-2, -1)  # B, num_heads, H*W, head_dim
+        
+        # Attention
+        attn = (q @ k.transpose(-2, -1)) * (self.head_dim ** -0.5)  # B, num_heads, H*W, H*W
+        attn = torch.softmax(attn, dim=-1)
+        
+        # Apply attention to values
+        out = (attn @ v)  # B, num_heads, H*W, head_dim
+        
+        # Reshape back
+        out = out.transpose(-2, -1).contiguous()  # B, num_heads, head_dim, H*W
+        out = out.view(b, c, h, w)
+        
+        # Output projection
+        out = self.out_proj(out)
+        x = residual + out
+        
+        # MLP block
+        residual = x
+        x = self.norm2(x)
+        x = self.mlp(x)
+        x = residual + x
+        
+        return x
+    
+class RefinementBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(RefinementBlock, self).__init__()
+        
+        # Initial refinement convolutions
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        
+        # Channel attention
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(out_channels, out_channels // 16, kernel_size=1)
+        self.fc2 = nn.Conv2d(out_channels // 16, out_channels, kernel_size=1)
+        
+        # Spatial refinement
+        self.conv_spatial = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn_spatial = nn.BatchNorm2d(out_channels)
+        
+        # Activation functions
+        self.relu = nn.ReLU(inplace=True)
+        self.sigmoid = nn.Sigmoid()
+        
+        # Skip connection for residual learning
+        self.downsample = None
+        if in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        identity = x
+        
+        # Initial refinement
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        # Channel attention
+        ca = self.avg_pool(out)
+        ca = self.fc1(ca)
+        ca = self.relu(ca)
+        ca = self.fc2(ca)
+        ca = self.sigmoid(ca)
+        
+        # Apply channel attention
+        out = out * ca
+        
+        # Spatial refinement
+        out = self.conv_spatial(out)
+        out = self.bn_spatial(out)
+        
+        # Handle skip connection
+        if self.downsample is not None:
+            identity = self.downsample(identity)
+            
+        # Add skip connection
+        out += identity
+        out = self.relu(out)
+        
+        return out
+
+class SobelFilter(nn.Module):
+    def __init__(self):
+        super(SobelFilter, self).__init__()
+        
+        # Define Sobel kernels
+        self.sobel_x = torch.tensor([
+            [-1, 0, 1],
+            [-2, 0, 2],
+            [-1, 0, 1]
+        ], dtype=torch.float32).reshape(1, 1, 3, 3)
+        
+        self.sobel_y = torch.tensor([
+            [-1, -2, -1],
+            [0, 0, 0],
+            [1, 2, 1]
+        ], dtype=torch.float32).reshape(1, 1, 3, 3)
+        
+    def forward(self, x):
+        # Move kernels to the same device as input
+        self.sobel_x = self.sobel_x.to(x.device)
+        self.sobel_y = self.sobel_y.to(x.device)
+        
+        # Handle RGB images by processing each channel
+        b, c, h, w = x.shape
+        edges = torch.zeros_like(x)
+        
+        # Process each channel separately
+        for i in range(c):
+            channel = x[:, i:i+1, :, :]
+            
+            # Apply Sobel filters
+            grad_x = F.conv2d(channel, self.sobel_x, padding=1)
+            grad_y = F.conv2d(channel, self.sobel_y, padding=1)
+            
+            # Calculate gradient magnitude
+            grad_mag = torch.sqrt(grad_x**2 + grad_y**2)
+            
+            edges[:, i:i+1, :, :] = grad_mag
+            
+        return edges
 
 def get_gpu_memory_stats():
     """
@@ -88,43 +271,61 @@ class PerceptualLoss(nn.Module):
             '15': "relu3_3",
             '22': "relu4_3"
         }
+        self.mse = nn.MSELoss()
         
-    def forward(self, x):
+    def forward(self, output, target):
+        output_features = self.get_features(output)
+        target_features = self.get_features(target)
+        
+        loss = 0
+        for key in self.layer_name_mapping.values():
+            loss += self.mse(output_features[key], target_features[key])
+        return loss
+        
+    def get_features(self, x):
         output = {}
         for name, module in self.vgg_layers._modules.items():
             x = module(x)
             if name in self.layer_name_mapping:
                 output[self.layer_name_mapping[name]] = x
         return output
-
+    
 class CombinedLoss(nn.Module):
-    def __init__(self, lambda_mse=1.0, lambda_perceptual=0.1):
+    def __init__(self):
         super(CombinedLoss, self).__init__()
         self.mse_loss = nn.MSELoss()
         self.perceptual_loss = PerceptualLoss()
-        self.lambda_mse = params.LAMBDA_MSE
-        self.lambda_perceptual = params.LAMDA_PERCEPTUAL
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
+        self.detail_loss = DetailLoss()
+        
     def forward(self, output, target):
-        # MSE Loss
+        # Convert from NHWC to NCHW format for perceptual loss
+        output_nchw = output.permute(0, 3, 1, 2)
+        target_nchw = target.permute(0, 3, 1, 2)
+        
+        # Calculate individual losses
         mse_loss = self.mse_loss(output, target)
+        perceptual_loss = self.perceptual_loss(output_nchw, target_nchw)
+        detail_loss = self.detail_loss(output_nchw, target_nchw)
         
-        # Perceptual Loss
-        output_normalized = self.normalize(output.permute(0, 3, 1, 2))  # Change from NHWC to NCHW and normalize
-        target_normalized = self.normalize(target.permute(0, 3, 1, 2))  # Change from NHWC to NCHW and normalize
-        
-        output_features = self.perceptual_loss(output_normalized)
-        target_features = self.perceptual_loss(target_normalized)
-        
-        perceptual_loss = 0
-        for key in output_features.keys():
-            perceptual_loss += self.mse_loss(output_features[key], target_features[key])
-        
-        # Combined Loss
-        total_loss = self.lambda_mse * mse_loss + self.lambda_perceptual * perceptual_loss
+        # Combine losses with their respective weights
+        total_loss = (params.LAMBDA_MSE * mse_loss + 
+                     params.LAMBDA_PERCEPTUAL * perceptual_loss +
+                     params.LAMBDA_DETAIL * detail_loss)
         
         return total_loss, mse_loss, perceptual_loss
+    
+class DetailLoss(nn.Module):
+    def __init__(self):
+        super(DetailLoss, self).__init__()
+        self.sobel = SobelFilter()
+        self.mse = nn.MSELoss()
+        
+    def forward(self, output, target):
+        # Note: input is already in NCHW format
+        output_edges = self.sobel(output)
+        target_edges = self.sobel(target)
+        return self.mse(output_edges, target_edges)
+    
 
 class PatchRelightingDataset(Dataset):
     def __init__(self, distances, cosines, albedo, normals, targets):
@@ -294,36 +495,104 @@ class AttentionBlock2D(nn.Module):
         fc2 = self.fc2(torch.relu(fc1))
         attention = self.sigmoid(fc2).view(x.size(0), x.size(1), 1, 1)
         return x * attention
+    
+class DenseResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DenseResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels//2, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels + out_channels//2, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels//2)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.prelu = nn.PReLU()
+        
+    def forward(self, x):
+        out1 = self.prelu(self.bn1(self.conv1(x)))
+        out2 = self.prelu(self.bn2(self.conv2(torch.cat([x, out1], dim=1))))
+        return out2
+
+class DetailEnhancementBranch(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DetailEnhancementBranch, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(32, out_channels, kernel_size=3, padding=1)
+        self.attention = SpatialAttention()
+        
+    def forward(self, x):
+        detail = self.conv1(x)
+        detail = self.conv2(detail)
+        detail = self.attention(detail)
+        return self.conv3(detail)
+
+class SpatialAttention(nn.Module):
+    def __init__(self):
+        super(SpatialAttention, self).__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3)
+        
+    def forward(self, x):
+        avg_pool = torch.mean(x, dim=1, keepdim=True)
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)
+        attention = torch.cat([avg_pool, max_pool], dim=1)
+        attention = torch.sigmoid(self.conv(attention))
+        return x * attention
 
 class RelightingModel(nn.Module):
     def __init__(self, albedo_channels):
         super(RelightingModel, self).__init__()
         
-        # Initial convolutions
-        self.conv_distances = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        self.conv_cosines = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        self.conv_albedo = nn.Conv2d(albedo_channels, 32, kernel_size=3, padding=1)
-        self.conv_normals = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        # Initial convolutions with increased channels
+        self.conv_distances = nn.Conv2d(1, 96, kernel_size=3, padding=1)
+        self.conv_cosines = nn.Conv2d(1, 96, kernel_size=3, padding=1)
+        self.conv_albedo = nn.Conv2d(albedo_channels, 48, kernel_size=3, padding=1)
+        self.conv_normals = nn.Conv2d(3, 48, kernel_size=3, padding=1)
         
-        # Encoder with dilated convolutions
-        self.encoder1 = ResidualBlock2D(192, 128, dilation=1)
-        self.encoder2 = ResidualBlock2D(128, 256, dilation=2)
-        self.encoder3 = ResidualBlock2D(256, 512, dilation=4)
-        self.encoder4 = ResidualBlock2D(512, 1024, dilation=8)
+        # Batch normalization layers
+        self.bn_distances = nn.BatchNorm2d(96)
+        self.bn_cosines = nn.BatchNorm2d(96)
+        self.bn_albedo = nn.BatchNorm2d(48)
+        self.bn_normals = nn.BatchNorm2d(48)
+        
+        # Activation function
+        self.prelu = nn.PReLU()
+        
+        # Multi-scale processing
+        self.conv_distances_small = nn.Conv2d(96, 48, kernel_size=1)
+        self.conv_distances_large = nn.Conv2d(96, 48, kernel_size=5, padding=2)
+        self.conv_cosines_small = nn.Conv2d(96, 48, kernel_size=1)
+        self.conv_cosines_large = nn.Conv2d(96, 48, kernel_size=5, padding=2)
+        
+        # Encoder
+        self.encoder1 = ResidualBlock2D(288, 128)  # 48*6 = 288 (concatenated features)
+        self.encoder2 = ResidualBlock2D(128, 256)
+        self.encoder3 = ResidualBlock2D(256, 512)
+        self.encoder4 = ResidualBlock2D(512, 1024)
         
         # Bridge
         self.bridge = AttentionBlock2D(1024)
         
         # Decoder
-        self.decoder3 = ResidualBlock2D(1536, 512)
-        self.decoder2 = ResidualBlock2D(768, 256)
-        self.decoder1 = ResidualBlock2D(384, 128)
+        self.decoder3 = ResidualBlock2D(1536, 512)  # 1024 + 512 = 1536
+        self.decoder2 = ResidualBlock2D(768, 256)   # 512 + 256 = 768
+        self.decoder1 = ResidualBlock2D(384, 128)   # 256 + 128 = 384
         
-        # Output
-        self.final_conv = nn.Conv2d(128, 3, kernel_size=1)
+        # Final convolutions
+        self.final_conv1 = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.PReLU()
+        )
         
+        self.final_conv2 = nn.Sequential(
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.PReLU()
+        )
+        
+        self.final_conv3 = nn.Conv2d(32, 3, kernel_size=1)
+        
+        # Pooling and upsampling
         self.pool = nn.MaxPool2d(2)
-        self.upsample = nn.Upsample(size=None, scale_factor=2, mode='bilinear', align_corners=True)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
     def ensure_size_match(self, x, target):
         """Ensure x matches target size"""
@@ -340,14 +609,21 @@ class RelightingModel(nn.Module):
         cosines = cosines.unsqueeze(1)
         albedo = albedo.permute(0, 3, 1, 2)
         normals = normals.permute(0, 3, 1, 2)
-
-        # Initial processing
-        x1 = self.conv_distances(distances)
-        x2 = self.conv_cosines(cosines)
-        x3 = self.conv_albedo(albedo)
-        x4 = self.conv_normals(normals)
         
-        x = torch.cat([x1, x2, x3, x4], dim=1)
+        # Initial processing with batch norm
+        x1 = self.prelu(self.bn_distances(self.conv_distances(distances)))
+        x2 = self.prelu(self.bn_cosines(self.conv_cosines(cosines)))
+        x3 = self.prelu(self.bn_albedo(self.conv_albedo(albedo)))
+        x4 = self.prelu(self.bn_normals(self.conv_normals(normals)))
+        
+        # Multi-scale processing for distances and cosines
+        x1_small = self.conv_distances_small(x1)
+        x1_large = self.conv_distances_large(x1)
+        x2_small = self.conv_cosines_small(x2)
+        x2_large = self.conv_cosines_large(x2)
+        
+        # Concatenate all features
+        x = torch.cat([x1_small, x1_large, x2_small, x2_large, x3, x4], dim=1)
         
         # Encoder
         e1 = self.encoder1(x)
@@ -355,10 +631,10 @@ class RelightingModel(nn.Module):
         e3 = self.encoder3(self.pool(e2))
         e4 = self.encoder4(self.pool(e3))
         
-        # Bridge
+        # Bridge with attention
         bridge = self.bridge(e4)
         
-        # Decoder with size matching
+        # Decoder with skip connections
         d3_up = self.upsample(bridge)
         d3_up = self.ensure_size_match(d3_up, e3)
         d3 = self.decoder3(torch.cat([d3_up, e3], dim=1))
@@ -371,20 +647,26 @@ class RelightingModel(nn.Module):
         d1_up = self.ensure_size_match(d1_up, e1)
         d1 = self.decoder1(torch.cat([d1_up, e1], dim=1))
         
-        # Output with size matching to input
-        out = self.final_conv(d1)
+        # Final convolutions
+        out = self.final_conv1(d1)
+        out = self.final_conv2(out)
+        out = self.final_conv3(out)
+        
+        # Ensure output size matches input size
         out = nn.functional.interpolate(out, size=original_size, mode='bilinear', align_corners=True)
         
-        # Reshape the output to match the target shape (N, H, W, 3)
+        # Reshape output to match target shape (N, H, W, 3)
         out = out.permute(0, 2, 3, 1)
-
+        
         intermediates = {
             'e1': e1, 'e2': e2, 'e3': e3, 'e4': e4,
             'd3': d3, 'd2': d2, 'd1': d1,
             'final': out
         }
+        
         return out, intermediates
     
+
 def visualize_output(model, val_loader, device):
     # Get a random batch from the validation set
     batch = next(iter(val_loader))
@@ -537,7 +819,14 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         device = torch.device("cpu")
     model = model.to(device)
     criterion = CombinedLoss().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=params.LEARNING_RATE)
+    # optimizer = optim.Adam(model.parameters(), lr=params.LEARNING_RATE, )
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=params.LEARNING_RATE,
+        betas=(0.9, 0.999),  # (beta1, beta2) - default values
+        eps=1e-8,           # epsilon for numerical stability
+        weight_decay=0      # L2 penalty (regularization)
+    )
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
     best_val_loss = float('inf')
@@ -675,6 +964,36 @@ def prepare_data(distances, cosines, albedo, normals, targets):
 
     return train_loader, val_loader, train_indices, val_indices
 
+def create_numbered_folder(base_path):
+    # Get current date and time
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Find existing folders that match the pattern
+    base_name = "saved_models"
+    existing_folders = [d for d in os.listdir(os.path.dirname(base_path)) 
+                       if os.path.isdir(os.path.join(os.path.dirname(base_path), d)) 
+                       and d.startswith(base_name)]
+    
+    # Find the next available number
+    max_num = -1
+    for folder in existing_folders:
+        try:
+            num = int(folder.split('_')[2])  # Assuming format: saved_models_XX_date_time
+            max_num = max(max_num, num)
+        except (IndexError, ValueError):
+            continue
+    
+    # Create new folder name with next number
+    new_num = str(max_num + 1).zfill(2)  # Pad with zeros to get XX format
+    folder_name = f"{base_name}_{new_num}_{current_time}"
+    
+    # Create full path
+    full_path = os.path.join(os.path.dirname(base_path), folder_name)
+    os.makedirs(full_path, exist_ok=True)
+
+    return full_path
+
+
 def train(distances, cosines, albedo, normals, targets):
     print("Going to train..")    
     
@@ -687,8 +1006,10 @@ def train(distances, cosines, albedo, normals, targets):
     print("Input shapes - distances: ", distances.shape, "cosines: ", cosines.shape, 
           "albedo: ", albedo.shape, "normals: ", normals.shape, "targets: ", targets.shape)
     
-    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models")
-    os.makedirs(model_save_path, exist_ok=True)
+    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models", "saved_model")
+    model_save_path = create_numbered_folder(model_save_path)
+    # Copy a file to the folder
+    shutil.copy2('./utils/params.py', model_save_path)
 
     # Prepare data
     print("Preparing data..")
