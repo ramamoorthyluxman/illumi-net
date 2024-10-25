@@ -259,6 +259,95 @@ def print_gpu_stats(epoch, batch_idx, num_batches):
     print("\n".join(get_gpu_utilization()))
     print("="*80 + "\n")
 
+class SurfaceDetailLoss(nn.Module):
+    def __init__(self):
+        super(SurfaceDetailLoss, self).__init__()
+        self.alpha = params.SPECULAR_WEIGHT
+        self.beta = params.SHADOW_WEIGHT
+        self.gamma = params.NORMAL_CONSISTENCY_WEIGHT
+        self.delta = params.ROUGHNESS_WEIGHT
+        
+        self.sobel = SobelFilter()
+
+    def compute_specular_loss(self, pred, target, light_dirs=None):
+        """
+        Compute loss for specular highlights considering light direction
+        """
+        # Calculate specular reflection based on predicted surface normals
+        specular_pred = self._compute_specular_term(pred)
+        specular_target = self._compute_specular_term(target)
+        return F.mse_loss(specular_pred, specular_target)
+
+    def compute_shadow_loss(self, pred, target):
+        """
+        Ensure consistent shadow formation across different lighting conditions
+        """
+        shadow_mask_pred = self._compute_shadow_regions(pred)
+        shadow_mask_target = self._compute_shadow_regions(target)
+        return F.binary_cross_entropy_with_logits(shadow_mask_pred, shadow_mask_target)
+
+    def compute_gradient_consistency(self, pred, target):
+        """
+        Enforce consistency in surface gradients and fine details
+        """
+        pred_edges = self.sobel(pred)
+        target_edges = self.sobel(target)
+        
+        # Multi-scale gradient comparison
+        loss = 0
+        for scale in [1.0, 0.5, 0.25]:
+            if scale != 1.0:
+                pred_scaled = F.interpolate(pred_edges, scale_factor=scale, mode='bilinear', align_corners=False)
+                target_scaled = F.interpolate(target_edges, scale_factor=scale, mode='bilinear', align_corners=False)
+            else:
+                pred_scaled = pred_edges
+                target_scaled = target_edges
+                
+            loss += F.l1_loss(pred_scaled, target_scaled)
+            
+        return loss
+
+    def compute_roughness_loss(self, pred, target):
+        """
+        Capture surface roughness variations using local variance
+        """
+        pred_var = self._local_variance(pred)
+        target_var = self._local_variance(target)
+        return F.l1_loss(pred_var, target_var)
+
+    def _local_variance(self, x, kernel_size=3):
+        """Compute local variance for roughness estimation"""
+        mean = F.avg_pool2d(x, kernel_size, stride=1, padding=kernel_size//2)
+        squared_mean = F.avg_pool2d(x * x, kernel_size, stride=1, padding=kernel_size//2)
+        return torch.relu(squared_mean - mean * mean)
+
+    def _compute_specular_term(self, x):
+        """Estimate specular component using gradient magnitude"""
+        grad_x = self.sobel.sobel_x.to(x.device)
+        grad_y = self.sobel.sobel_y.to(x.device)
+        
+        dx = F.conv2d(x, grad_x.expand(x.size(1), -1, -1, -1), padding=1, groups=x.size(1))
+        dy = F.conv2d(x, grad_y.expand(x.size(1), -1, -1, -1), padding=1, groups=x.size(1))
+        
+        return torch.sqrt(dx.pow(2) + dy.pow(2) + 1e-6)
+
+    def _compute_shadow_regions(self, x):
+        """Estimate shadow regions using intensity thresholding"""
+        mean_intensity = torch.mean(x, dim=1, keepdim=True)
+        return self._local_variance(mean_intensity)
+
+    def forward(self, pred, target):
+        spec_loss = self.compute_specular_loss(pred, target)
+        shadow_loss = self.compute_shadow_loss(pred, target)
+        grad_loss = self.compute_gradient_consistency(pred, target)
+        rough_loss = self.compute_roughness_loss(pred, target)
+        
+        total_loss = (self.alpha * spec_loss + 
+                     self.beta * shadow_loss + 
+                     self.gamma * grad_loss + 
+                     self.delta * rough_loss)
+        
+        return total_loss
 
 class PerceptualLoss(nn.Module):
     def __init__(self):
@@ -295,19 +384,20 @@ class CombinedLoss(nn.Module):
         super(CombinedLoss, self).__init__()
         self.mse_loss = nn.MSELoss()
         self.perceptual_loss = PerceptualLoss()
-        self.detail_loss = DetailLoss()
+        self.detail_loss = SurfaceDetailLoss()
         
     def forward(self, output, target):
-        # Convert from NHWC to NCHW format for perceptual loss
-        output_nchw = output.permute(0, 3, 1, 2)
-        target_nchw = target.permute(0, 3, 1, 2)
+        # Convert from NHWC to NCHW format if needed
+        if output.size(1) != 3:  # If not in NCHW format
+            output = output.permute(0, 3, 1, 2)
+            target = target.permute(0, 3, 1, 2)
         
         # Calculate individual losses
         mse_loss = self.mse_loss(output, target)
-        perceptual_loss = self.perceptual_loss(output_nchw, target_nchw)
-        detail_loss = self.detail_loss(output_nchw, target_nchw)
+        perceptual_loss = self.perceptual_loss(output, target)
+        detail_loss = self.detail_loss(output, target)
         
-        # Combine losses with their respective weights
+        # Combine losses with their respective weights from params
         total_loss = (params.LAMBDA_MSE * mse_loss + 
                      params.LAMBDA_PERCEPTUAL * perceptual_loss +
                      params.LAMBDA_DETAIL * detail_loss)
