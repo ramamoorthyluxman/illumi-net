@@ -28,4 +28,4 @@ else:
                             cosines=data_.cosine_matrices, 
                             albedo=data_.surface_albedos, 
                             normals=data_.surface_normals, 
-                            output_dir='/work/imvia/ra7916lu/illumi-net/data/2024_02_22_1_2/reconstructed')
+                            output_dir='/work/imvia/ra7916lu/illumi-net/data/subset/2024_02_22_1_3/images/Face_A/rti_sub_images/reconstructed')

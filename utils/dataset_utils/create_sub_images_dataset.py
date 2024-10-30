@@ -28,8 +28,8 @@ def duplicate_folder_and_crop_images(folder_path, x, y, width, height):
     print(f"Folder duplicated and images cropped. New folder: {new_folder_path}")
 
 # Example usage
-folder_path = r"C:\Users\etudiants\iCloudDrive\Documents\postdoc-cheminova\illumi-net\data\2024_02_22_1_1\rti"  # Replace with your folder path
-x, y, width, height = 1288, 836 , 128, 128  # Replace with your desired crop values
+folder_path = r"/work/imvia/ra7916lu/illumi-net/data/subset/2024_02_22_1_3/images/Face_A/rti"  
+x, y, width, height = 840, 388 , 1024, 1024  # Replace with your desired crop values
 
 duplicate_folder_and_crop_images(folder_path, x, y, width, height)
 
