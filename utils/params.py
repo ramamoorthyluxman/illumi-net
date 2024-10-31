@@ -19,6 +19,7 @@ MAX_NB_IMAGES_PER_ACQ = 105
 COMPUTE_NORMALS_AND_ALBEDO = False # Ensure TRAINING is True
 COMPUTE_DISTANCES_AND_COSINES = False # Ensure TRAINING is True
 CREATE_DIST_COSINES_HEATMAPS = False # Ensure TRAINING is True
+COLLIMATED_LIGHT = True 
 
 # SURFACE_PHYSCIAL_SIZE = [(1024*0.250)/2704, (1024*0.160)/1800] #default [0.250, 0.120]
 # SURFACE_PHYSCIAL_SIZE = [0.250, 0.160] #default [0.250, 0.160] #width , height
@@ -36,7 +37,7 @@ PS_METHOD = "RPCA_SOLVER"    # Robust PCA
 RTI_NET_EPOCHS = 200000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 2
 # RTI_NET_PATCH_SIZE = [256,256] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
-RTI_NET_PATCH_SIZE = [128,128] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
+RTI_NET_PATCH_SIZE = [32,32] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
 RTI_MAX_NUMBER_PATCHES = 64 # Randomly choose desired number of patches from the image. 
 
 # RTI Relighting
@@ -47,16 +48,16 @@ TRAINING = True # Training: True, Relighting: False. If you choose relighting- e
 
 
 # Model Params
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 TRAIN_SHUFFLE = True
 VAL_SHUFFLE = False
 NUM_WORKERS = 4
-LEARNING_RATE = 0.00005
-LAMBDA_HIGHLIGHT = 1.0
-LAMBDA_GRADIENT = 0.75
-LAMBDA_SPECULAR = 0.8
-LAMBDA_CONTRAST = 0.8
-LAMBDA_PERCEPTUAL = 0.75
+LEARNING_RATE = 0.001
+LAMBDA_HIGHLIGHT = 0.5
+LAMBDA_GRADIENT = 0.65
+LAMBDA_SPECULAR = 0.7
+LAMBDA_CONTRAST = 0.5
+LAMBDA_PERCEPTUAL = 1.0
 PERSISTENT_WORKER =True,
 PIN_MEMORY =True,
 PREFETCH_FACTOR=3

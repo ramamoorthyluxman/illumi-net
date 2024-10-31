@@ -151,23 +151,39 @@ class dataset:
 
     def compute_distances_and_cosines(self):
         print("Computing distances and cosines...")
+        print(f"Light type: {'Collimated' if params.COLLIMATED_LIGHT else 'Point source'}")
+        
         for i in range(len(self.acqs)):
             img_shape = cv2.imread(self.image_paths[i][0]).shape
             distance_matrices = []
             angles_matrices = []
+            
             for j in range(len(self.image_paths[i])):
+                # Calculate center distance (used for both collimated and point source)
                 center_distance = np.linalg.norm(np.array(self.lps_cartesian[i][j]))
+                
                 h, w, _ = img_shape
                 surface_width, surface_height = params.SURFACE_PHYSCIAL_SIZE
                 x = np.linspace(-surface_width / 2, surface_width / 2, w)
                 y = np.linspace(surface_height / 2, -surface_height / 2, h)
                 X, Y = np.meshgrid(x, y)
-                Z = np.zeros_like(X)        
-                distances = np.sqrt((X - self.lps_cartesian[i][j][0])**2 + (Y - self.lps_cartesian[i][j][1])**2 + (Z - self.lps_cartesian[i][j][2])**2)
-                distances = distances**2
-                # Ensure that the angle calculation is safe for arccos
-                cos_theta = np.clip(-self.lps_cartesian[i][j][2] / distances, -1.0, 1.0)
+                Z = np.zeros_like(X)
+                
+                if params.COLLIMATED_LIGHT:
+                    # For collimated light, use constant distance for all points
+                    distances = np.full_like(X, center_distance**2)
+                else:
+                    # For point source, calculate distance for each point
+                    distances = np.sqrt((X - self.lps_cartesian[i][j][0])**2 + 
+                                    (Y - self.lps_cartesian[i][j][1])**2 + 
+                                    (Z - self.lps_cartesian[i][j][2])**2)
+                    distances = distances**2
+                
+                # Angle calculation remains the same for both cases
+                # For collimated light, this will give constant angles across the surface
+                cos_theta = np.clip(-self.lps_cartesian[i][j][2] / np.sqrt(distances), -1.0, 1.0)
                 angles = np.arccos(cos_theta)
+                
                 distance_matrices.append(distances)
                 angles_matrices.append(angles)
         
