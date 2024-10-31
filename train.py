@@ -919,27 +919,33 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         print("Using CPU")
         device = torch.device("cpu")
     model = model.to(device)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     criterion = CombinedLoss().to(device)
     # optimizer = optim.Adam(model.parameters(), lr=params.LEARNING_RATE, )
-    optimizer = optim.Adam(
+    optimizer = optim.AdamW(  # Switch to AdamW
         model.parameters(),
-        lr=params.LEARNING_RATE,
-        betas=(0.9, 0.999),  # (beta1, beta2) - default values
-        eps=1e-8,           # epsilon for numerical stability
-        weight_decay= 0.0001     # L2 penalty (regularization)
+        lr=params.LEARNING_RATE,  
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01  # Increased weight decay
     )
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
-                                                     patience=5, 
-                                                     factor=0.5)
-    best_val_loss = float('inf')
+    # Modified learning rate scheduler
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=0.5,
+        patience=3,
+        verbose=True,
+        min_lr=1e-6
+    )
 
     train_losses = []
     val_losses = []
 
+
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
-
         # Print GPU stats at the start of each epoch
         print_gpu_stats(epoch, 0, len(train_loader))
 
@@ -949,6 +955,13 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
             albedo = batch['albedo'].to(device)
             normals = batch['normals'].to(device)
             targets = batch['target'].to(device)
+
+            # Check for invalid values in inputs
+            if (torch.isnan(distances).any() or torch.isnan(cosines).any() or 
+                torch.isnan(albedo).any() or torch.isnan(normals).any() or 
+                torch.isnan(targets).any()):
+                print(f"Warning: NaN detected in input batch {batch_idx}")
+                continue
 
             optimizer.zero_grad()
             outputs, _ = model(distances, cosines, albedo, normals)
