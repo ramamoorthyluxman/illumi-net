@@ -260,73 +260,174 @@ def print_gpu_stats(epoch, batch_idx, num_batches):
     print("="*80 + "\n")
 
 
-class PerceptualLoss(nn.Module):
+class HighlightAwareLoss(nn.Module):
     def __init__(self):
-        super(PerceptualLoss, self).__init__()
-        vgg = models.vgg16(pretrained=True).features.eval()
-        self.vgg_layers = nn.ModuleList(vgg)
-        self.layer_name_mapping = {
-            '3': "relu1_2",
-            '8': "relu2_2",
-            '15': "relu3_3",
-            '22': "relu4_3"
-        }
-        self.mse = nn.MSELoss()
+        super(HighlightAwareLoss, self).__init__()
+        self.threshold = 0.8  # Threshold for highlight detection
         
     def forward(self, output, target):
-        output_features = self.get_features(output)
-        target_features = self.get_features(target)
+        # Detect highlight regions (bright areas)
+        highlight_mask = (target > self.threshold).float()
         
+        # Calculate MSE with higher weight for highlight regions
+        highlight_error = F.mse_loss(output * highlight_mask, target * highlight_mask)
+        normal_error = F.mse_loss(output * (1 - highlight_mask), target * (1 - highlight_mask))
+        
+        # Weight highlight errors more heavily
+        return 3.0 * highlight_error + normal_error
+
+class GradientLoss(nn.Module):
+    def __init__(self):
+        super(GradientLoss, self).__init__()
+        self.sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
+        self.sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
+        
+    def forward(self, output, target):
+        if self.sobel_x.device != output.device:
+            self.sobel_x = self.sobel_x.to(output.device)
+            self.sobel_y = self.sobel_y.to(output.device)
+            
+        # Compute gradients for each channel
         loss = 0
-        for key in self.layer_name_mapping.values():
-            loss += self.mse(output_features[key], target_features[key])
+        for c in range(output.shape[1]):
+            # Output gradients
+            gx_output = F.conv2d(output[:,c:c+1], self.sobel_x.view(1,1,3,3), padding=1)
+            gy_output = F.conv2d(output[:,c:c+1], self.sobel_y.view(1,1,3,3), padding=1)
+            
+            # Target gradients
+            gx_target = F.conv2d(target[:,c:c+1], self.sobel_x.view(1,1,3,3), padding=1)
+            gy_target = F.conv2d(target[:,c:c+1], self.sobel_y.view(1,1,3,3), padding=1)
+            
+            # Gradient magnitude difference
+            loss += F.l1_loss(torch.sqrt(gx_output**2 + gy_output**2), 
+                            torch.sqrt(gx_target**2 + gy_target**2))
+            
         return loss
+
+class SpecularityLoss(nn.Module):
+    def __init__(self):
+        super(SpecularityLoss, self).__init__()
         
-    def get_features(self, x):
-        output = {}
-        for name, module in self.vgg_layers._modules.items():
-            x = module(x)
-            if name in self.layer_name_mapping:
-                output[self.layer_name_mapping[name]] = x
-        return output
+    def forward(self, output, target):
+        # Calculate local maxima in target (potential specular highlights)
+        max_pool = nn.functional.max_pool2d(target, kernel_size=3, stride=1, padding=1)
+        specular_mask = (target == max_pool).float()
+        
+        # Higher weight for specular regions
+        specular_loss = F.l1_loss(output * specular_mask, target * specular_mask)
+        non_specular_loss = F.l1_loss(output * (1 - specular_mask), target * (1 - specular_mask))
+        
+        return 2.0 * specular_loss + non_specular_loss
+
+class ContrastLoss(nn.Module):
+    def __init__(self):
+        super(ContrastLoss, self).__init__()
+        self.avg_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+        
+    def forward(self, output, target):
+        # Local contrast
+        output_mean = self.avg_pool(output)
+        target_mean = self.avg_pool(target)
+        
+        output_contrast = output - output_mean
+        target_contrast = target - target_mean
+        
+        return F.mse_loss(output_contrast, target_contrast)
+
+class EnhancedPerceptualLoss(nn.Module):
+    def __init__(self):
+        super(EnhancedPerceptualLoss, self).__init__()
+        vgg = models.vgg16(pretrained=True).features.eval()
+        
+        # First conv layer of VGG expects 3 channels
+        self.slice1 = nn.Sequential(*list(vgg.children())[:4])
+        self.slice2 = nn.Sequential(*list(vgg.children())[4:9])
+        self.slice3 = nn.Sequential(*list(vgg.children())[9:16])
+        self.slice4 = nn.Sequential(*list(vgg.children())[16:23])
+        
+        for param in self.parameters():
+            param.requires_grad = False
+            
+    def normalize(self, x):
+        """Normalize input to VGG expected range"""
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(x.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(x.device)
+        return (x - mean) / std
+            
+    def forward(self, output, target):
+        # Ensure input is in right format and range
+        output = self.normalize(output.clamp(0, 1))
+        target = self.normalize(target.clamp(0, 1))
+        
+        output_features = []
+        target_features = []
+        
+        # Extract features
+        out = output
+        target_out = target
+        
+        for slice_net in [self.slice1, self.slice2, self.slice3, self.slice4]:
+            out = slice_net(out)
+            target_out = slice_net(target_out)
+            output_features.append(out)
+            target_features.append(target_out)
+        
+        # Calculate loss with different weights for different layers
+        loss = 0
+        weights = [1.0, 0.8, 0.6, 0.4]
+        
+        for feat_out, feat_target, weight in zip(output_features, target_features, weights):
+            loss += weight * (F.mse_loss(feat_out, feat_target) + 
+                            0.5 * F.l1_loss(feat_out, feat_target))
+            
+        return loss
     
 class CombinedLoss(nn.Module):
     def __init__(self):
         super(CombinedLoss, self).__init__()
         self.mse_loss = nn.MSELoss()
-        self.perceptual_loss = PerceptualLoss()
-        self.detail_loss = DetailLoss()
         
     def forward(self, output, target):
-        # Convert from NHWC to NCHW format for perceptual loss
-        output_nchw = output.permute(0, 3, 1, 2)
-        target_nchw = target.permute(0, 3, 1, 2)
+        # Convert from NHWC to NCHW if needed
+        if output.dim() == 4 and output.shape[-1] == 3:
+            output = output.permute(0, 3, 1, 2)
+            target = target.permute(0, 3, 1, 2)
+            
+        # Main loss components
+        mse = self.mse_loss(output, target)
         
-        # Calculate individual losses
-        mse_loss = self.mse_loss(output, target)
-        perceptual_loss = self.perceptual_loss(output_nchw, target_nchw)
-        detail_loss = self.detail_loss(output_nchw, target_nchw)
+        # Highlight-aware loss
+        bright_regions = (target > 0.7).float()
+        highlight_loss = F.mse_loss(output * bright_regions, target * bright_regions)
         
-        # Combine losses with their respective weights
-        total_loss = (params.LAMBDA_MSE * mse_loss + 
-                     params.LAMBDA_PERCEPTUAL * perceptual_loss +
-                     params.LAMBDA_DETAIL * detail_loss)
+        # Gradient loss
+        dy_out, dx_out = torch.gradient(output, dim=(-2, -1))
+        dy_target, dx_target = torch.gradient(target, dim=(-2, -1))
+        gradient_loss = F.mse_loss(torch.sqrt(dx_out**2 + dy_out**2), 
+                                 torch.sqrt(dx_target**2 + dy_target**2))
         
-        return total_loss, mse_loss, perceptual_loss
+        # Local contrast loss
+        avg_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+        output_contrast = output - avg_pool(output)
+        target_contrast = target - avg_pool(target)
+        contrast_loss = F.mse_loss(output_contrast, target_contrast)
+        
+        # Specular highlight loss
+        max_pool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)(target)
+        specular_regions = (target > 0.9 * max_pool).float()
+        specular_loss = F.mse_loss(output * specular_regions, target * specular_regions)
+        
+        # Total loss
+        total_loss = (
+            0.5 * mse +
+            2.0 * highlight_loss +
+            0.5 * gradient_loss +
+            0.3 * contrast_loss +
+            1.0 * specular_loss
+        )
+        
+        return total_loss, mse, gradient_loss
     
-class DetailLoss(nn.Module):
-    def __init__(self):
-        super(DetailLoss, self).__init__()
-        self.sobel = SobelFilter()
-        self.mse = nn.MSELoss()
-        
-    def forward(self, output, target):
-        # Note: input is already in NCHW format
-        output_edges = self.sobel(output)
-        target_edges = self.sobel(target)
-        return self.mse(output_edges, target_edges)
-    
-
 class PatchRelightingDataset(Dataset):
     def __init__(self, distances, cosines, albedo, normals, targets):
         # Convert inputs to numpy arrays if they aren't already
@@ -825,10 +926,11 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
         lr=params.LEARNING_RATE,
         betas=(0.9, 0.999),  # (beta1, beta2) - default values
         eps=1e-8,           # epsilon for numerical stability
-        weight_decay=0      # L2 penalty (regularization)
+        weight_decay= 0.0001     # L2 penalty (regularization)
     )
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
-
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
+                                                     patience=5, 
+                                                     factor=0.5)
     best_val_loss = float('inf')
 
     train_losses = []
