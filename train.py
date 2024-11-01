@@ -419,11 +419,11 @@ class CombinedLoss(nn.Module):
         
         # Total loss
         total_loss = (
-            0.5 * mse +
-            2.0 * highlight_loss +
-            0.5 * gradient_loss +
-            0.3 * contrast_loss +
-            1.0 * specular_loss
+            params.LAMBDA_MSE * mse +
+            params.LAMBDA_HIGHLIGHT * highlight_loss +
+            params.LAMBDA_GRADIENT * gradient_loss +
+            params.LAMBDA_CONTRAST * contrast_loss +
+            params.LAMBDA_SPECULAR * specular_loss
         )
         
         return total_loss, mse, gradient_loss
@@ -976,23 +976,94 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     model = model.to(device)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     criterion = CombinedLoss().to(device)
-    # optimizer = optim.Adam(model.parameters(), lr=params.LEARNING_RATE, )
-    optimizer = optim.AdamW(  # Switch to AdamW
-        model.parameters(),
-        lr=params.LEARNING_RATE,  
-        betas=(0.9, 0.999),
-        eps=1e-8,
-        weight_decay=0.01  # Increased weight decay
-    )
-    # Modified learning rate scheduler
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=0.5,
-        patience=3,
-        verbose=True,
-        min_lr=1e-6
-    )
+    
+    optimizer = None
+    scheduler = None
+    if params.OPTIMIZER == "Adam":
+        # Option 1: Adam with gradient clipping and cyclic learning rate
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=params.WEIGHT_DECAY
+        )
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scheduler = optim.lr_scheduler.CyclicLR(
+            optimizer,
+            base_lr=params.LEARNING_RATE / 10,
+            max_lr=params.LEARNING_RATE,
+            cycle_momentum=False
+        )
+
+    elif params.OPTIMIZER == "AdamW":
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=params.WEIGHT_DECAY,
+            amsgrad=True  # Uses the maximum of past squared gradients
+        )
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=params.EPOCHS_PER_CYCLE,
+            T_mult=2
+        )
+    elif params.OPTIMIZER == "Lion":
+        # Requires: pip install lion-pytorch
+        from lion_pytorch import Lion
+        optimizer = Lion(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            weight_decay=params.WEIGHT_DECAY,
+            beta1=0.9,
+            beta2=0.99
+        )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=3,
+            verbose=True,
+            min_lr=1e-6
+        )
+    elif params.OPTIMIZER == "RAdam":
+        optimizer = optim.RAdam(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=params.WEIGHT_DECAY
+        )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=3,
+            verbose=True,
+            min_lr=1e-6
+        )
+    elif params.OPTIMIZER == "AdaBelief":
+    # Requires: pip install adabelief-pytorch
+        from adabelief_pytorch import AdaBelief
+        optimizer = AdaBelief(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            eps=1e-16,
+            betas=(0.9, 0.999),
+            weight_decay=params.WEIGHT_DECAY,
+            weight_decouple=True,
+            rectify=False
+        )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=3,
+            verbose=True,
+            min_lr=1e-6
+        )
 
     train_losses = []
     val_losses = []

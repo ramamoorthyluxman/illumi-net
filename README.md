@@ -202,3 +202,6 @@ This projects the final feature map to the desired 3-channel output.
 5. **Transformers**: While not using self-attention like transformers, the attention block incorporates a form of global context similar to the global attention in vision transformers.
 
 In summary, this network is a hybrid architecture that combines the strengths of U-Net (encoder-decoder with skip connections), ResNet (residual learning), dilated
+
+
+check  https://github.com/juntang-zhuang/Adabelief-Optimizer

@@ -37,31 +37,38 @@ PS_METHOD = "RPCA_SOLVER"    # Robust PCA
 RTI_NET_EPOCHS = 200000
 RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS = 2
 # RTI_NET_PATCH_SIZE = [256,256] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
-RTI_NET_PATCH_SIZE = [32,32] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
-RTI_MAX_NUMBER_PATCHES = 64 # Randomly choose desired number of patches from the image. 
+RTI_NET_PATCH_SIZE = [64,64] #[height, width]. Must be divisible by 32  or [192, 192], [256, 256], etc.
+RTI_MAX_NUMBER_PATCHES = 128 # Randomly choose desired number of patches from the image. 
 
 # RTI Relighting
-RTI_MODEL_PATH = r'/work/imvia/ra7916lu/illumi-net/saved_models/saved_models_20_20241031_000207/relighting_model_epoch_22.pth'
+RTI_MODEL_PATH = r'/work/imvia/ra7916lu/illumi-net/saved_models/saved_models_53_20241031_212153/relighting_model_epoch_26.pth'
 
 # Goal
 TRAINING = True # Training: True, Relighting: False. If you choose relighting- ensure the path contains - 1. distances.npy, 2. cosines.npy, 3. albedo and 4. normals
 
 
 # Model Params
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 TRAIN_SHUFFLE = True
 VAL_SHUFFLE = False
 NUM_WORKERS = 4
 LEARNING_RATE = 0.001
-LAMBDA_HIGHLIGHT = 0.5
-LAMBDA_GRADIENT = 0.65
-LAMBDA_SPECULAR = 0.7
+LAMBDA_MSE = 0.75
+LAMBDA_HIGHLIGHT = 1.0
+LAMBDA_GRADIENT = 0.5
+LAMBDA_SPECULAR = 1.0
 LAMBDA_CONTRAST = 0.5
-LAMBDA_PERCEPTUAL = 1.0
+LAMBDA_PERCEPTUAL = 0.5
 PERSISTENT_WORKER =True,
 PIN_MEMORY =True,
 PREFETCH_FACTOR=3
 CUDA_VISIBLE_DEVICES = "0,1"
+PATCH_PIX_VAL_THRESHOLD = 0.1
+NON_BLACK_PIX_RATIO_MIN = 0.5
+RTI_MAX_IMAGES_PER_CHUNK = 40  # Maximum number of images to process at once. For relighting
+
+OPTIMIZER = "AdaBelief"
+WEIGHT_DECAY = 0.01
 
 # Visualizations
 SAMPLE_NUMBER_OF_COMPARISONS = 8
