@@ -455,9 +455,9 @@ class PatchRelightingDataset(Dataset):
         self.patch_size, self.patches_per_image = self.calculate_patches() 
         print("Adjusted patch size, number of patches: ", self.patch_size, self.patches_per_image)       
         
-        # Create patches list
-        self.patches = self._create_patches()  
-        print(f"Created {len(self.patches)} total patches")
+        # Create patches list with content validation
+        self.patches = self._create_valid_patches()  
+        print(f"Created {len(self.patches)} valid patches after filtering")
 
     def calculate_patches(self):
         print("Calculating the patches")
@@ -485,15 +485,52 @@ class PatchRelightingDataset(Dataset):
         
         return [patch_height, patch_width], adjusted_patches
 
-    def _create_patches(self):
+    def is_valid_patch(self, k, n, i, j):
+        """
+        Check if a patch contains enough non-black pixels
+        """
+        patch_slice = slice(i, i + self.patch_size[0]), slice(j, j + self.patch_size[1])
+        
+        # Check target image patch
+        target_patch = self.targets[k, n][patch_slice]
+        
+        # Calculate the percentage of non-black pixels
+        # A pixel is considered non-black if its intensity is above a threshold
+        threshold = params.PATCH_PIX_VAL_THRESHOLD   # Adjust this threshold as needed
+        non_black_pixels = torch.sum(torch.max(target_patch, dim=2)[0] > threshold)
+        total_pixels = self.patch_size[0] * self.patch_size[1]
+        non_black_ratio = non_black_pixels / total_pixels
+        
+        # Check if the patch also has valid normals and albedo
+        normal_patch = self.normals[k][patch_slice]
+        albedo_patch = self.albedo[k][patch_slice]
+        
+        has_valid_normals = torch.sum(torch.abs(normal_patch) > threshold) > 0
+        has_valid_albedo = torch.sum(torch.abs(albedo_patch) > threshold) > 0
+        
+        # Define minimum required ratio of non-black pixels
+        required_ratio = params.NON_BLACK_PIX_RATIO_MIN  # Adjust this value based on your needs
+        
+        return (non_black_ratio > required_ratio and 
+                has_valid_normals and 
+                has_valid_albedo)
+
+    def _create_valid_patches(self):
         patches = []
+        attempted_patches = 0
+        max_attempts = self.patches_per_image * 3  # Allow for extra attempts to find valid patches
         K, N, H, W = self.distances.shape
         grid_size = math.isqrt(self.patches_per_image)
         cell_h, cell_w = H // grid_size, W // grid_size
         
+        print("Creating valid patches...")
+        
         for k in range(K):
             for n in range(N):
-                for _ in range(self.patches_per_image):
+                valid_patches_count = 0
+                attempts = 0
+                
+                while valid_patches_count < self.patches_per_image and attempts < max_attempts:
                     # Randomly select a grid cell
                     i = random.randint(0, grid_size - 1)
                     j = random.randint(0, grid_size - 1)
@@ -514,18 +551,30 @@ class PatchRelightingDataset(Dataset):
                     h = random.randint(h_start, h_end)
                     w = random.randint(w_start, w_end)
                     
-                    patches.append((k, n, h, w))
+                    # Check if the patch is valid
+                    if self.is_valid_patch(k, n, h, w):
+                        patches.append((k, n, h, w))
+                        valid_patches_count += 1
+                    
+                    attempts += 1
+                    attempted_patches += 1
+                    
+                    if attempts % 100 == 0:
+                        print(f"Attempted {attempts} patches, found {valid_patches_count} valid patches")
+                
+                if valid_patches_count < self.patches_per_image:
+                    print(f"Warning: Could only find {valid_patches_count} valid patches for image {k}, view {n}")
+        
+        print(f"Created {len(patches)} valid patches out of {attempted_patches} attempts")
         
         # Verify we have patches
-        assert len(patches) > 0, "No patches were created"
+        assert len(patches) > 0, "No valid patches were created"
         return patches
 
     def __len__(self):
-        """Return the total number of patches"""
         return len(self.patches)
 
     def __getitem__(self, idx):
-        """Get a specific patch by index"""
         if idx >= len(self.patches):
             raise IndexError(f"Index {idx} out of bounds for dataset with {len(self.patches)} patches")
             
@@ -540,6 +589,12 @@ class PatchRelightingDataset(Dataset):
                 'normals': self.normals[k][patch_slice],
                 'target': self.targets[k, n][patch_slice]
             }
+            
+            # Additional validation
+            if torch.isnan(item['target']).any():
+                raise ValueError("NaN values found in target patch")
+            if torch.all(item['target'] == 0):
+                raise ValueError("Completely black patch found")
             
             # Validate output shapes
             pH, pW = self.patch_size
