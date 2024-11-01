@@ -10,7 +10,7 @@
 #              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_5/images/Face_A/rti'
 #             ]
 
-ACQ_PATHS = [r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG']
+ACQ_PATHS = [r'/work/imvia/ra7916lu/illumi-net/data/subset/2024_02_22_1_3/images/Face_A/rti_sub_images']
              
              
             
@@ -19,11 +19,11 @@ MAX_NB_IMAGES_PER_ACQ = 105
 COMPUTE_NORMALS_AND_ALBEDO = False # Ensure TRAINING is True
 COMPUTE_DISTANCES_AND_COSINES = False # Ensure TRAINING is True
 CREATE_DIST_COSINES_HEATMAPS = False # Ensure TRAINING is True
-COLLIMATED_LIGHT = True 
+COLLIMATED_LIGHT = False 
 
 # SURFACE_PHYSCIAL_SIZE = [(1024*0.250)/2704, (1024*0.160)/1800] #default [0.250, 0.120]
-# SURFACE_PHYSCIAL_SIZE = [0.250, 0.160] #default [0.250, 0.160] #width , height
-SURFACE_PHYSCIAL_SIZE = [0.05, 0.0421] #default [0.250, 0.120]
+SURFACE_PHYSCIAL_SIZE = [0.250, 0.160] #default [0.250, 0.160] #width , height
+# SURFACE_PHYSCIAL_SIZE = [0.05, 0.0421] #default [0.250, 0.120]
 
 
 # Compute normals params
@@ -72,3 +72,6 @@ WEIGHT_DECAY = 0.01
 
 # Visualizations
 SAMPLE_NUMBER_OF_COMPARISONS = 8
+
+PATCH_STD_THRESHOLD = 0.03
+EPOCHS_PER_CYCLE = 5

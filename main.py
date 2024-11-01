@@ -4,7 +4,7 @@ from utils import dataset
 import os
 import numpy as np
 import train
-import relight
+# import relight
 
 data_ = dataset(params.ACQ_PATHS)
 
