@@ -1,3 +1,5 @@
+# Train.py
+
 # System and basic imports
 import os
 import sys
@@ -22,584 +24,217 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+import torchvision.models as models
 import torchvision.transforms as transforms
 
 # Local imports
 from utils import params
 
 # Set visible GPUs
-os.environ["CUDA_VISIBLE_DEVICES"] = params.CUDA_VISIBLE_DEVICES
+os.environ["CUDA_VISIBLE_DEVICES"] = params.CUDA_VISIBLE_DEVICES  # Modify this according to your needs
 
-class ReflectanceNet(nn.Module):
-    def __init__(self, albedo_channels):
-        super(ReflectanceNet, self).__init__()
+class MultiHeadAttentionBlock(nn.Module):
+    def __init__(self, channels):
+        super(MultiHeadAttentionBlock, self).__init__()
+        self.channels = channels
+        self.num_heads = 8
+        self.head_dim = channels // 8
+        assert channels % self.num_heads == 0, f"Channels {channels} must be divisible by num_heads {self.num_heads}"
         
-        def init_weights(m):
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+        # Linear projections
+        self.q_proj = nn.Conv2d(channels, channels, 1)
+        self.k_proj = nn.Conv2d(channels, channels, 1)
+        self.v_proj = nn.Conv2d(channels, channels, 1)
+        self.out_proj = nn.Conv2d(channels, channels, 1)
         
-        # Initial feature extraction - simplified but wider
-        self.distance_encoder = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True)
+        # Normalization and activation
+        self.norm1 = nn.BatchNorm2d(channels)
+        self.norm2 = nn.BatchNorm2d(channels)
+        self.mlp = nn.Sequential(
+            nn.Conv2d(channels, channels * 4, 1),
+            nn.ReLU(),
+            nn.Conv2d(channels * 4, channels, 1)
         )
         
-        self.cosine_encoder = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True)
-        )
+    def forward(self, x):
+        b, c, h, w = x.shape
         
-        self.albedo_encoder = nn.Sequential(
-            nn.Conv2d(albedo_channels, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True)
-        )
+        # First normalization
+        residual = x
+        x = self.norm1(x)
         
-        self.normal_encoder = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True)
-        )
+        # Reshape for attention
+        q = self.q_proj(x).view(b, self.num_heads, self.head_dim, h * w)
+        k = self.k_proj(x).view(b, self.num_heads, self.head_dim, h * w)
+        v = self.v_proj(x).view(b, self.num_heads, self.head_dim, h * w)
         
-        # Main processing
-        self.main_process = nn.Sequential(
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True)
-        )
+        # Transpose for matrix multiplication
+        q = q.transpose(-2, -1)  # B, num_heads, H*W, head_dim
+        k = k.transpose(-2, -1)  # B, num_heads, H*W, head_dim
+        v = v.transpose(-2, -1)  # B, num_heads, H*W, head_dim
         
-        # Specular attention
-        self.specular_attention = nn.Sequential(
-            nn.Conv2d(128, 64, 1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 1, 1),
-            nn.Sigmoid()
-        )
+        # Attention
+        attn = (q @ k.transpose(-2, -1)) * (self.head_dim ** -0.5)  # B, num_heads, H*W, H*W
+        attn = torch.softmax(attn, dim=-1)
         
-        # Final reconstruction
-        self.reconstruction = nn.Sequential(
-            nn.Conv2d(128, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 3, 3, padding=1),
-            nn.ReLU(inplace=True)
-        )
+        # Apply attention to values
+        out = (attn @ v)  # B, num_heads, H*W, head_dim
         
-        # Initialize weights
-        self.apply(init_weights)
+        # Reshape back
+        out = out.transpose(-2, -1).contiguous()  # B, num_heads, head_dim, H*W
+        out = out.view(b, c, h, w)
         
-    def forward(self, distances, cosines, albedo, normals):
-        # Ensure correct dimensions and normalize inputs
-        distances = torch.clamp(distances.unsqueeze(1), 0, 1)
-        cosines = torch.clamp(cosines.unsqueeze(1), -1, 1)
-        albedo = torch.clamp(albedo.permute(0, 3, 1, 2), 0, 1)
+        # Output projection
+        out = self.out_proj(out)
+        x = residual + out
         
-        # Normalize normals
-        normals = normals.permute(0, 3, 1, 2)
-        normals_norm = torch.norm(normals, dim=1, keepdim=True).clamp(min=1e-6)
-        normals = normals / normals_norm
+        # MLP block
+        residual = x
+        x = self.norm2(x)
+        x = self.mlp(x)
+        x = residual + x
         
-        # Extract features
-        dist_features = self.distance_encoder(distances)
-        cos_features = self.cosine_encoder(cosines)
-        albedo_features = self.albedo_encoder(albedo)
-        normal_features = self.normal_encoder(normals)
+        return x
+    
+class RefinementBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(RefinementBlock, self).__init__()
         
-        # Combine features
-        features = torch.cat([
-            dist_features, cos_features, 
-            albedo_features, normal_features
-        ], dim=1)
+        # Initial refinement convolutions
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
         
-        # Process features
-        processed = self.main_process(features)
+        # Channel attention
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(out_channels, out_channels // 16, kernel_size=1)
+        self.fc2 = nn.Conv2d(out_channels // 16, out_channels, kernel_size=1)
         
-        # Generate specular attention mask
-        specular_mask = self.specular_attention(processed)
+        # Spatial refinement
+        self.conv_spatial = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn_spatial = nn.BatchNorm2d(out_channels)
         
-        # Final reconstruction
-        output = self.reconstruction(processed)
+        # Activation functions
+        self.relu = nn.ReLU(inplace=True)
+        self.sigmoid = nn.Sigmoid()
         
-        # Ensure output is in valid range
-        output = output.clamp(0, 1).permute(0, 2, 3, 1)
-        
-        return output, {'specular_mask': specular_mask}
-
-class ReflectanceLoss(nn.Module):
-    def __init__(self):
-        super(ReflectanceLoss, self).__init__()
-        self.mse = nn.MSELoss()
-        
-    def forward(self, output, target, specular_mask=None):
-        # Base reconstruction loss
-        mse_loss = self.mse(output, target)
-        
-        # Gradient loss for preserving edges
-        dy_out, dx_out = torch.gradient(output, dim=(1, 2))
-        dy_target, dx_target = torch.gradient(target, dim=(1, 2))
-        gradient_loss = F.mse_loss(torch.sqrt(dx_out**2 + dy_out**2), 
-                                 torch.sqrt(dx_target**2 + dy_target**2))
-        
-        # Specular-aware loss
-        if specular_mask is not None:
-            specular_regions = (target > 0.8).float()  # Identify bright regions in target
-            specular_loss = F.mse_loss(
-                output * specular_regions,
-                target * specular_regions
+        # Skip connection for residual learning
+        self.downsample = None
+        if in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                nn.BatchNorm2d(out_channels)
             )
-        else:
-            specular_loss = torch.tensor(0.0, device=output.device)
-        
-        # Combined loss
-        total_loss = (
-            mse_loss + 
-            0.5 * gradient_loss + 
-            2.0 * specular_loss
-        )
-        
-        return total_loss
 
-class PatchDataset(Dataset):
-    def __init__(self, distances, cosines, albedo, normals, targets):
-        self.distances = torch.FloatTensor(distances)
-        self.cosines = torch.FloatTensor(cosines)
-        self.albedo = torch.FloatTensor(albedo)
-        self.normals = torch.FloatTensor(normals)
-        self.targets = torch.FloatTensor(targets)
+    def forward(self, x):
+        identity = x
         
-        # Normalize inputs to prevent numerical issues
-        self.normalize_inputs()
+        # Initial refinement
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
         
-        self.patch_size = params.RTI_NET_PATCH_SIZE
-        self.patches = self._create_patches()
-        print(f"Created dataset with {len(self.patches)} valid patches")
-    
-    def normalize_inputs(self):
-        """Normalize inputs to prevent numerical issues"""
-        # Normalize targets to [0, 1]
-        if torch.max(self.targets) > 0:
-            self.targets = self.targets / torch.max(self.targets)
+        # Channel attention
+        ca = self.avg_pool(out)
+        ca = self.fc1(ca)
+        ca = self.relu(ca)
+        ca = self.fc2(ca)
+        ca = self.sigmoid(ca)
         
-        # Normalize distances
-        if torch.max(self.distances) > 0:
-            self.distances = self.distances / torch.max(self.distances)
+        # Apply channel attention
+        out = out * ca
         
-        # Ensure cosines are in [-1, 1]
-        self.cosines = torch.clamp(self.cosines, -1, 1)
+        # Spatial refinement
+        out = self.conv_spatial(out)
+        out = self.bn_spatial(out)
         
-        # Normalize albedo to [0, 1]
-        if torch.max(self.albedo) > 0:
-            self.albedo = self.albedo / torch.max(self.albedo)
-        
-        # Normalize normals to unit length
-        norm = torch.norm(self.normals, dim=-1, keepdim=True)
-        self.normals = torch.where(norm > 0, self.normals / (norm + 1e-6), self.normals)
-    
-    def _is_valid_patch(self, k, n, i, j):
-        """Check if a patch is valid based on content"""
-        # Get the target patch
-        patch = self.targets[k, n, i:i+self.patch_size[0], j:j+self.patch_size[1]]
-        
-        # Calculate percentage of non-zero pixels (across all channels)
-        non_zero_mask = torch.any(patch > 0.01, dim=-1)  # Check across color channels
-        non_zero_ratio = torch.sum(non_zero_mask).item() / (patch.shape[0] * patch.shape[1])
-        
-        # Check if patch has some variation
-        patch_std = torch.std(patch)
-        
-        # More lenient criteria:
-        # 1. At least 10% non-zero pixels
-        # 2. Some variation in the patch
-        is_valid = non_zero_ratio > 0.05 and patch_std > 0.005
-        
-        if not is_valid:
-            return False, f"Invalid patch at {k},{n},{i},{j}: non_zero_ratio={non_zero_ratio:.3f}, std={patch_std:.3f}"
-        return True, ""
-    
-    def _create_patches(self):
-        """Create list of valid patches"""
-        K, N, H, W = self.distances.shape
-        patches = []
-        
-        # Calculate stride (75% overlap for more patches)
-        stride_h = self.patch_size[0] // 4
-        stride_w = self.patch_size[1] // 4
-        
-        total_patches = 0
-        invalid_reasons = []
-        
-        for k in range(K):
-            for n in range(N):
-                for i in range(0, H - self.patch_size[0] + 1, stride_h):
-                    for j in range(0, W - self.patch_size[1] + 1, stride_w):
-                        total_patches += 1
-                        is_valid, reason = self._is_valid_patch(k, n, i, j)
-                        if is_valid:
-                            patches.append((k, n, i, j))
-                        else:
-                            invalid_reasons.append(reason)
-        
-        print(f"Patch Statistics:")
-        print(f"Total patches considered: {total_patches}")
-        print(f"Valid patches: {len(patches)} ({len(patches)/total_patches*100:.1f}%)")
-        
-        if len(invalid_reasons) > 0:
-            print("\nSample of invalid patch reasons:")
-            for reason in invalid_reasons[:5]:  # Show first 5 reasons
-                print(reason)
-        
-        if len(patches) < params.BATCH_SIZE:
-            raise ValueError(f"Only found {len(patches)} valid patches, need at least {params.BATCH_SIZE} for a single batch")
+        # Handle skip connection
+        if self.downsample is not None:
+            identity = self.downsample(identity)
             
-        return patches
-    
-    def __len__(self):
-        return len(self.patches)
-    
-      
-    def __getitem__(self, idx):
-        k, n, i, j = self.patches[idx]
-        patch_slice = slice(i, i+self.patch_size[0]), slice(j, j+self.patch_size[1])
+        # Add skip connection
+        out += identity
+        out = self.relu(out)
         
-        try:
-            item = {
-                'distances': self.distances[k, n][patch_slice],
-                'cosines': self.cosines[k, n][patch_slice],
-                'albedo': self.albedo[k][patch_slice],
-                'normals': self.normals[k][patch_slice],
-                'target': self.targets[k, n][patch_slice]
-            }
-            
-            # Additional validation
-            for key, value in item.items():
-                if torch.isnan(value).any():
-                    print(f"Warning: NaN values found in {key} for patch {k},{n},{i},{j}")
-                    # Replace NaN values with zeros
-                    item[key] = torch.nan_to_num(value, 0.0)
-            
-            return item
-            
-        except Exception as e:
-            print(f"Error loading patch {k},{n},{i},{j}: {str(e)}")
-            # Return a neighboring valid patch instead
-            alternate_idx = (idx + 1) % len(self.patches)
-            return self.__getitem__(alternate_idx)
+        return out
 
-
-def train_model(model, train_loader, val_loader, num_epochs, model_save_path):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    
-    criterion = ReflectanceLoss().to(device)
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=1e-4,  # Lower initial learning rate
-        weight_decay=1e-5,
-        eps=1e-8
-    )
-    
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=0.5,
-        patience=5,
-        verbose=True,
-        min_lr=1e-6
-    )
-    
-    train_losses = []
-    val_losses = []
-    
-    for epoch in range(num_epochs):
-        model.train()
-        train_loss = 0.0
-        batch_count = 0
+class SobelFilter(nn.Module):
+    def __init__(self):
+        super(SobelFilter, self).__init__()
         
-        for batch in train_loader:
-            distances = batch['distances'].to(device)
-            cosines = batch['cosines'].to(device)
-            albedo = batch['albedo'].to(device)
-            normals = batch['normals'].to(device)
-            targets = batch['target'].to(device)
+        # Define Sobel kernels
+        self.sobel_x = torch.tensor([
+            [-1, 0, 1],
+            [-2, 0, 2],
+            [-1, 0, 1]
+        ], dtype=torch.float32).reshape(1, 1, 3, 3)
+        
+        self.sobel_y = torch.tensor([
+            [-1, -2, -1],
+            [0, 0, 0],
+            [1, 2, 1]
+        ], dtype=torch.float32).reshape(1, 1, 3, 3)
+        
+    def forward(self, x):
+        # Move kernels to the same device as input
+        self.sobel_x = self.sobel_x.to(x.device)
+        self.sobel_y = self.sobel_y.to(x.device)
+        
+        # Handle RGB images by processing each channel
+        b, c, h, w = x.shape
+        edges = torch.zeros_like(x)
+        
+        # Process each channel separately
+        for i in range(c):
+            channel = x[:, i:i+1, :, :]
             
-            optimizer.zero_grad()
-            outputs, intermediates = model(distances, cosines, albedo, normals)
-            loss = criterion(outputs, targets, intermediates.get('specular_mask'))
+            # Apply Sobel filters
+            grad_x = F.conv2d(channel, self.sobel_x, padding=1)
+            grad_y = F.conv2d(channel, self.sobel_y, padding=1)
             
-            if not torch.isnan(loss):
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                train_loss += loss.item()
-                batch_count += 1
-        
-        # Calculate average training loss
-        if batch_count > 0:
-            train_loss /= batch_count
-        else:
-            print("Warning: No valid batches in training epoch")
-            continue
-        
-        # Validation
-        model.eval()
-        val_loss = 0.0
-        val_batch_count = 0
-        
-        with torch.no_grad():
-            for batch in val_loader:
-                distances = batch['distances'].to(device)
-                cosines = batch['cosines'].to(device)
-                albedo = batch['albedo'].to(device)
-                normals = batch['normals'].to(device)
-                targets = batch['target'].to(device)
-                
-                outputs, intermediates = model(distances, cosines, albedo, normals)
-                loss = criterion(outputs, targets, intermediates.get('specular_mask'))
-                
-                if not torch.isnan(loss):
-                    val_loss += loss.item()
-                    val_batch_count += 1
-        
-        # Calculate average validation loss
-        if val_batch_count > 0:
-            val_loss /= val_batch_count
-        else:
-            print("Warning: No valid batches in validation")
-            val_loss = float('inf')
-        
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
-        
-        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-        
-        # Update learning rate scheduler
-        if not math.isnan(val_loss):
-            scheduler.step(val_loss)
-        
-        # Save model and visualizations periodically
-        if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
-            # Only save if we have valid losses
-            if not math.isnan(train_loss) and not math.isnan(val_loss):
-                save_visualizations(model, val_loader, device, epoch + 1, model_save_path)
-                torch.save(model.state_dict(), 
-                          os.path.join(model_save_path, f'reflectance_model_epoch_{epoch+1}.pth'))
-                
-                # Save loss plot
-                plt.figure(figsize=(10, 5))
-                plt.plot(train_losses, label='Train Loss')
-                plt.plot(val_losses, label='Validation Loss')
-                plt.xlabel('Epoch')
-                plt.ylabel('Loss')
-                plt.title('Training and Validation Losses')
-                plt.legend()
-                plt.grid(True)
-                plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch+1}.png'))
-                plt.close()
-        
-        # Early stopping condition
-        if len(train_losses) > 10 and all(math.isnan(x) for x in train_losses[-5:]):
-            print("Training stopped due to consecutive NaN losses")
-            break
-    
-    return model
-
-def save_visualizations(model, val_loader, device, epoch, save_path):
-    model.eval()
-    with torch.no_grad():
-        batch = next(iter(val_loader))
-        distances = batch['distances'].to(device)
-        cosines = batch['cosines'].to(device)
-        albedo = batch['albedo'].to(device)
-        normals = batch['normals'].to(device)
-        targets = batch['target'].to(device)
-        
-        outputs, intermediates = model(distances, cosines, albedo, normals)
-        
-        # Save sample images
-        for i in range(min(3, outputs.shape[0])):
-            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+            # Calculate gradient magnitude
+            grad_mag = torch.sqrt(grad_x**2 + grad_y**2)
             
-            ax1.imshow(targets[i].cpu().numpy())
-            ax1.set_title('Target')
-            ax1.axis('off')
+            edges[:, i:i+1, :, :] = grad_mag
             
-            ax2.imshow(outputs[i].cpu().numpy())
-            ax2.set_title('Output')
-            ax2.axis('off')
-            
-            ax3.imshow(intermediates['specular_mask'][i, 0].cpu().numpy(), cmap='hot')
-            ax3.set_title('Specular Mask')
-            ax3.axis('off')
-            
-            plt.savefig(os.path.join(save_path, f'visualization_epoch_{epoch}_sample_{i}.png'))
-            plt.close()
-
-def prepare_data(distances, cosines, albedo, normals, targets):
-    """
-    Prepare data loaders with proper splitting strategy based on data dimensions.
-    """
-    K, N = distances.shape[:2]
-    
-    if K == 1:
-        # When we have only one sample, split along N (number of lighting conditions)
-        print("Single sample detected, splitting along lighting conditions dimension")
-        train_indices, val_indices = train_test_split(range(N), test_size=0.2, random_state=42)
-        
-        # Create datasets by splitting along N
-        train_dataset = PatchDataset(
-            distances[:, train_indices], 
-            cosines[:, train_indices],
-            albedo,  # Albedo doesn't have N dimension
-            normals,  # Normals don't have N dimension
-            targets[:, train_indices]
-        )
-        
-        val_dataset = PatchDataset(
-            distances[:, val_indices], 
-            cosines[:, val_indices],
-            albedo,  # Albedo doesn't have N dimension
-            normals,  # Normals don't have N dimension
-            targets[:, val_indices]
-        )
-    else:
-        # When we have multiple samples, split along K
-        print("Multiple samples detected, splitting along sample dimension")
-        train_indices, val_indices = train_test_split(range(K), test_size=0.2, random_state=42)
-        
-        train_dataset = PatchDataset(
-            distances[train_indices], 
-            cosines[train_indices],
-            albedo[train_indices], 
-            normals[train_indices],
-            targets[train_indices]
-        )
-        
-        val_dataset = PatchDataset(
-            distances[val_indices], 
-            cosines[val_indices],
-            albedo[val_indices], 
-            normals[val_indices],
-            targets[val_indices]
-        )
-    
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=params.BATCH_SIZE,
-        shuffle=True,
-        num_workers=params.NUM_WORKERS,
-        pin_memory=True
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=params.BATCH_SIZE,
-        shuffle=False,
-        num_workers=params.NUM_WORKERS,
-        pin_memory=True
-    )
-    
-    print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Validation dataset size: {len(val_dataset)}")
-    
-    return train_loader, val_loader
-
-def train(distances, cosines, albedo, normals, targets):
-    print("Starting training process...")
-    
-    # Convert inputs to numpy arrays
-    distances = np.array(distances)
-    cosines = np.array(cosines)
-    albedo = np.array(albedo)
-    normals = np.array(normals)
-    targets = np.array(targets)
-    
-    # Create save directory
-    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_save_path = os.path.join(model_save_path, f"reflectance_model_{timestamp}")
-    os.makedirs(model_save_path, exist_ok=True)
-    
-    # Save training parameters
-    shutil.copy2('./utils/params.py', model_save_path)
-    
-    print("Input shapes:")
-    print(f"Distances: {distances.shape}")
-    print(f"Cosines: {cosines.shape}")
-    print(f"Albedo: {albedo.shape}")
-    print(f"Normals: {normals.shape}")
-    print(f"Targets: {targets.shape}")
-    
-    # Prepare data loaders
-    print("Preparing data loaders...")
-    train_loader, val_loader = prepare_data(distances, cosines, albedo, normals, targets)
-    
-    # Initialize model
-    print("Initializing model...")
-    model = ReflectanceNet(albedo_channels=albedo.shape[-1])
-    
-    # Print model summary
-    print("\nModel Architecture:")
-    print(model)
-    
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"\nTotal parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
-    
-    # Training setup
-    print("\nStarting training...")
-    trained_model = train_model(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        num_epochs=params.RTI_NET_EPOCHS,
-        model_save_path=model_save_path
-    )
-    
-    # Save final model
-    final_model_path = os.path.join(model_save_path, 'reflectance_model_final.pth')
-    torch.save(trained_model.state_dict(), final_model_path)
-    print(f"\nTraining completed. Final model saved at: {final_model_path}")
-    
-    return trained_model
+        return edges
 
 def get_gpu_memory_stats():
-    """Get GPU memory usage statistics"""
+    """
+    Get the GPU memory usage stats using nvidia-smi
+    Returns a string with memory usage info for each GPU
+    """
     if not torch.cuda.is_available():
         return "GPU not available"
     
     try:
         gpu_stats = []
         for i in range(torch.cuda.device_count()):
+            # Get memory usage in MB
             allocated = torch.cuda.memory_allocated(i) / 1024**2
-            reserved = torch.cuda.memory_reserved(i) / 1024**2
+            cached = torch.cuda.memory_reserved(i) / 1024**2
             
-            props = torch.cuda.get_device_properties(i)
-            gpu_stats.append(
-                f"GPU {i} ({props.name}): "
-                f"{allocated:.1f}MB allocated, "
-                f"{reserved:.1f}MB reserved"
-            )
+            # Get device properties
+            prop = torch.cuda.get_device_properties(i)
+            total_memory = prop.total_memory / 1024**2
+            
+            gpu_stats.append(f"GPU {i} ({prop.name}): "
+                           f"{allocated:.1f}MB allocated, "
+                           f"{cached:.1f}MB cached, "
+                           f"{total_memory:.1f}MB total")
     except Exception as e:
         return f"Error getting GPU stats: {str(e)}"
     
     return "\n".join(gpu_stats)
 
 def get_gpu_utilization():
-    """Get GPU utilization percentage"""
+    """
+    Get GPU utilization using nvidia-smi
+    Returns utilization percentage for each GPU
+    """
     try:
         result = subprocess.check_output(
             ['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
@@ -611,7 +246,9 @@ def get_gpu_utilization():
         return ["Could not get GPU utilization"]
 
 def print_gpu_stats(epoch, batch_idx, num_batches):
-    """Print comprehensive GPU statistics"""
+    """
+    Print comprehensive GPU statistics
+    """
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print("\n" + "="*80)
     print(f"GPU Stats at {current_time} (Epoch {epoch+1}, Batch {batch_idx}/{num_batches})")
@@ -622,22 +259,1043 @@ def print_gpu_stats(epoch, batch_idx, num_batches):
     print("\n".join(get_gpu_utilization()))
     print("="*80 + "\n")
 
-# if __name__ == "__main__":
-#     # Example usage
-#     try:
-#         # Assuming data is loaded from somewhere
-#         # distances, cosines, albedo, normals, targets = load_data()
+
+class CombinedLoss(nn.Module):
+    def __init__(self, use_perceptual=True, input_channels=3):
+        super(CombinedLoss, self).__init__()
+        self.use_perceptual = use_perceptual
+        self.input_channels = input_channels
+        self.hist_bins = 64
         
-#         # Set random seeds for reproducibility
-#         random.seed(42)
-#         np.random.seed(42)
-#         torch.manual_seed(42)
-#         if torch.cuda.is_available():
-#             torch.cuda.manual_seed_all(42)
+        # Basic losses
+        self.mse_loss = nn.MSELoss()
+        self.l1_loss = nn.L1Loss()
         
-#         # Train model
-#         model = train(distances, cosines, albedo, normals, targets)
+        # Initialize VGG for perceptual loss if needed
+        if self.use_perceptual:
+            vgg = models.vgg16(pretrained=True)
+            
+            # If input channels != 3, modify the first conv layer
+            if input_channels != 3:
+                self.channel_adapt = nn.Conv2d(input_channels, 3, kernel_size=1)
+            else:
+                self.channel_adapt = nn.Identity()
+            
+            # Only use the first few layers of VGG to avoid channel mismatch
+            self.vgg_features = nn.Sequential(
+                *list(vgg.features)[:4]  # Only use up to relu1_2
+            ).eval()
+            
+            # Freeze VGG parameters
+            for param in self.vgg_features.parameters():
+                param.requires_grad = False
+            
+        # Pooling layers for reuse
+        self.avg_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
         
-#     except Exception as e:
-#         print(f"Error during training: {str(e)}")
-#         raise
+        # Sobel filters for gradient computation
+        self.register_buffer('sobel_x', torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], 
+                                                    dtype=torch.float32).view(1, 1, 3, 3))
+        self.register_buffer('sobel_y', torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], 
+                                                    dtype=torch.float32).view(1, 1, 3, 3))
+    
+    def normalize_vgg(self, x):
+        """Normalize input to VGG expected range"""
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(x.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(x.device)
+        return (x - mean) / std
+    
+    def compute_gradient_sobel(self, x):
+        """Compute gradients using Sobel filters"""
+        gradients = []
+        for c in range(x.shape[1]):
+            gx = F.conv2d(x[:, c:c+1], self.sobel_x, padding=1)
+            gy = F.conv2d(x[:, c:c+1], self.sobel_y, padding=1)
+            gradients.append(torch.sqrt(gx**2 + gy**2))
+        return torch.cat(gradients, dim=1)
+    
+    def compute_perceptual_loss(self, output, target):
+        """Compute perceptual loss using VGG features"""
+        if not self.use_perceptual:
+            return torch.tensor(0.0).to(output.device)
+            
+        # Adapt channels if needed
+        output = self.channel_adapt(output)
+        target = self.channel_adapt(target)
+        
+        # Ensure values are in [0, 1]
+        output = output.clamp(0, 1)
+        target = target.clamp(0, 1)
+        
+        # Normalize for VGG
+        output = self.normalize_vgg(output)
+        target = self.normalize_vgg(target)
+        
+        # Extract features and compute loss
+        output_features = self.vgg_features(output)
+        target_features = self.vgg_features(target)
+        
+        # Use normalized MSE loss for features
+        return F.mse_loss(output_features, target_features)
+    
+    def compute_range_losses(self, output, target):
+        """
+        Compute separate losses for different intensity ranges to ensure accurate 
+        pixel-level prediction across the full dynamic range
+        """
+        losses = {}
+        
+        # Dark regions (shadows) - more sensitive to small differences
+        dark_mask = (target <= 0.2).float()
+        losses['dark'] = torch.mean((output * dark_mask - target * dark_mask) ** 2)
+        
+        # Mid-tones
+        mid_mask = ((target > 0.2) & (target < 0.8)).float()
+        losses['mid'] = torch.mean((output * mid_mask - target * mid_mask) ** 2)
+        
+        # Bright regions (highlights) - prevent clipping
+        bright_mask = (target >= 0.8).float()
+        losses['bright'] = 2.0 * torch.mean((output * bright_mask - target * bright_mask) ** 2)
+        
+        # Penalize any extreme deviations more heavily
+        large_diff_mask = (torch.abs(output - target) > 0.1).float()
+        losses['large_dev'] = 2.0 * torch.mean((output * large_diff_mask - target * large_diff_mask) ** 2)
+        
+        return losses
+
+    
+    def forward(self, output, target):
+        # Ensure input format
+        if output.dim() == 4 and output.shape[-1] == self.input_channels:
+            output = output.permute(0, 3, 1, 2)
+            target = target.permute(0, 3, 1, 2)
+        
+        losses = {}
+        
+        # 1. Basic MSE and L1 loss
+        losses['mse'] = self.mse_loss(output, target)
+        losses['l1'] = self.l1_loss(output, target)
+        
+        # 2. Highlight-aware loss
+        bright_mask = (target > 0.7).float()
+        losses['highlight'] = F.mse_loss(output * bright_mask, target * bright_mask)
+        
+        # 3. Gradient loss (using Sobel)
+        output_grad = self.compute_gradient_sobel(output)
+        target_grad = self.compute_gradient_sobel(target)
+        losses['gradient'] = F.mse_loss(output_grad, target_grad)
+        
+        # 4. Local contrast loss
+        output_mean = self.avg_pool(output)
+        target_mean = self.avg_pool(target)
+        output_contrast = output - output_mean
+        target_contrast = target - target_mean
+        losses['contrast'] = F.mse_loss(output_contrast, target_contrast)
+        
+        # 5. Specular highlight loss
+        max_pooled = self.max_pool(target)
+        specular_mask = (target > 0.8 * max_pooled).float()
+        losses['specular'] = F.mse_loss(output * specular_mask, target * specular_mask)
+        
+        # 6. Perceptual loss (if enabled)
+        if self.use_perceptual:
+            losses['perceptual'] = self.compute_perceptual_loss(output, target)
+
+        # New range-specific losses
+        range_losses = self.compute_range_losses(output, target)
+        losses.update(range_losses)
+
+        # Compute total loss with weights
+        total_loss = (
+            params.LAMBDA_MSE * losses['mse'] +
+            params.LAMBDA_L1 * losses['l1'] +
+            params.LAMBDA_HIGHLIGHT * losses['highlight'] +
+            params.LAMBDA_GRADIENT * losses['gradient'] +
+            params.LAMBDA_CONTRAST * losses['contrast'] +
+            params.LAMBDA_SPECULAR * losses['specular'] +
+            params.LAMBDA_DARK * losses['dark'] +          # Add these to params.py
+            params.LAMBDA_MID * losses['mid'] +           # Suggested values:
+            params.LAMBDA_BRIGHT * losses['bright'] +     # LAMBDA_DARK = 1.0
+            params.LAMBDA_LARGE_DEV * losses['large_dev'] # LAMBDA_MID = 1.0
+        )
+        
+        if self.use_perceptual:
+            total_loss += params.LAMBDA_PERCEPTUAL * losses['perceptual']
+        
+        return total_loss, losses
+    
+class PatchRelightingDataset(Dataset):
+    def __init__(self, distances, cosines, albedo, normals, targets):
+        # Convert inputs to numpy arrays if they aren't already
+        distances = np.array(distances)
+        cosines = np.array(cosines)
+        albedo = np.array(albedo)
+        normals = np.array(normals)
+        targets = np.array(targets)
+        
+        # Validate input shapes
+        K, N, H, W = distances.shape
+        assert cosines.shape == (K, N, H, W), f"Cosines shape {cosines.shape} doesn't match distances shape {distances.shape}"
+        assert albedo.shape == (K, H, W, 3), f"Albedo shape {albedo.shape} doesn't match expected shape {(K, H, W, 3)}"
+        assert normals.shape == (K, H, W, 3), f"Normals shape {normals.shape} doesn't match expected shape {(K, H, W, 3)}"
+        assert targets.shape == (K, N, H, W, 3), f"Targets shape {targets.shape} doesn't match expected shape {(K, N, H, W, 3)}"
+        
+        # Convert to torch tensors
+        self.distances = torch.FloatTensor(distances)
+        self.cosines = torch.FloatTensor(cosines)
+        self.albedo = torch.FloatTensor(albedo)
+        self.normals = torch.FloatTensor(normals)
+        self.targets = torch.FloatTensor(targets)
+        
+        # Calculate patch size and number of patches
+        self.patch_size, self.patches_per_image = self.calculate_patches() 
+        print("Adjusted patch size, number of patches: ", self.patch_size, self.patches_per_image)       
+        
+        # Create patches list with content validation
+        self.patches = self._create_valid_patches()  
+        print(f"Created {len(self.patches)} valid patches after filtering")
+
+    def calculate_patches(self):
+        print("Calculating the patches")
+        patch_height, patch_width = params.RTI_NET_PATCH_SIZE
+        desired_patches = params.RTI_MAX_NUMBER_PATCHES
+        _, _, image_height, image_width = self.distances.shape
+        
+        # Ensure patch sizes are not larger than image dimensions and are divisible by 32
+        patch_height = min(patch_height, image_height)
+        patch_width = min(patch_width, image_width)
+        patch_height = (patch_height // 32) * 32
+        patch_width = (patch_width // 32) * 32
+        
+        # Ensure patches are not zero-sized
+        assert patch_height > 0 and patch_width > 0, f"Invalid patch size: {patch_height}x{patch_width}"
+        
+        # Calculate maximum possible patches
+        max_patches_y = image_height // patch_height
+        max_patches_x = image_width // patch_width
+        max_patches = max_patches_y * max_patches_x
+        
+        # Adjust desired patches if it exceeds maximum possible
+        adjusted_patches = min(desired_patches, max_patches)
+        assert adjusted_patches > 0, "No valid patches could be created"
+        
+        return [patch_height, patch_width], adjusted_patches
+
+    def is_valid_patch(self, k, n, i, j):
+        """
+        Check if a patch contains enough non-black pixels
+        """
+        patch_slice = slice(i, i + self.patch_size[0]), slice(j, j + self.patch_size[1])
+        
+        # Check target image patch
+        target_patch = self.targets[k, n][patch_slice]
+        
+        # Calculate the percentage of non-black pixels
+        # A pixel is considered non-black if its intensity is above a threshold
+        threshold = params.PATCH_PIX_VAL_THRESHOLD   # Adjust this threshold as needed
+        non_black_pixels = torch.sum(torch.max(target_patch, dim=2)[0] > threshold)
+        total_pixels = self.patch_size[0] * self.patch_size[1]
+        non_black_ratio = non_black_pixels / total_pixels
+        
+        # Check if the patch also has valid normals and albedo
+        normal_patch = self.normals[k][patch_slice]
+        albedo_patch = self.albedo[k][patch_slice]
+        
+        has_valid_normals = torch.sum(torch.abs(normal_patch) > threshold) > 0
+        has_valid_albedo = torch.sum(torch.abs(albedo_patch) > threshold) > 0
+        
+        # Define minimum required ratio of non-black pixels
+        required_ratio = params.NON_BLACK_PIX_RATIO_MIN  # Adjust this value based on your needs
+        
+        return (non_black_ratio > required_ratio and 
+                has_valid_normals and 
+                has_valid_albedo)
+
+    def _create_valid_patches(self):
+        patches = []
+        attempted_patches = 0
+        max_attempts = self.patches_per_image * 3  # Allow for extra attempts to find valid patches
+        K, N, H, W = self.distances.shape
+        grid_size = math.isqrt(self.patches_per_image)
+        cell_h, cell_w = H // grid_size, W // grid_size
+        
+        print("Creating valid patches...")
+        
+        for k in range(K):
+            for n in range(N):
+                valid_patches_count = 0
+                attempts = 0
+                
+                while valid_patches_count < self.patches_per_image and attempts < max_attempts:
+                    # Randomly select a grid cell
+                    i = random.randint(0, grid_size - 1)
+                    j = random.randint(0, grid_size - 1)
+                    
+                    # Calculate the range for this grid cell
+                    h_start = i * cell_h
+                    h_end = min((i + 1) * cell_h, H) - self.patch_size[0]
+                    w_start = j * cell_w
+                    w_end = min((j + 1) * cell_w, W) - self.patch_size[1]
+                    
+                    # Ensure valid ranges
+                    h_start = max(0, h_start)
+                    h_end = max(h_start, h_end)
+                    w_start = max(0, w_start)
+                    w_end = max(w_start, w_end)
+                    
+                    # Randomly select a patch within this grid cell
+                    h = random.randint(h_start, h_end)
+                    w = random.randint(w_start, w_end)
+                    
+                    # Check if the patch is valid
+                    if self.is_valid_patch(k, n, h, w):
+                        patches.append((k, n, h, w))
+                        valid_patches_count += 1
+                    
+                    attempts += 1
+                    attempted_patches += 1
+                    
+                    if attempts % 100 == 0:
+                        print(f"Attempted {attempts} patches, found {valid_patches_count} valid patches")
+                
+                if valid_patches_count < self.patches_per_image:
+                    print(f"Warning: Could only find {valid_patches_count} valid patches for image {k}, view {n}")
+        
+        print(f"Created {len(patches)} valid patches out of {attempted_patches} attempts")
+        
+        # Verify we have patches
+        assert len(patches) > 0, "No valid patches were created"
+        return patches
+
+    def __len__(self):
+        return len(self.patches)
+
+    def __getitem__(self, idx):
+        if idx >= len(self.patches):
+            raise IndexError(f"Index {idx} out of bounds for dataset with {len(self.patches)} patches")
+            
+        k, n, i, j = self.patches[idx]
+        patch_slice = slice(i, i + self.patch_size[0]), slice(j, j + self.patch_size[1])
+        
+        try:
+            item = {
+                'distances': self.distances[k, n][patch_slice],
+                'cosines': self.cosines[k, n][patch_slice],
+                'albedo': self.albedo[k][patch_slice],
+                'normals': self.normals[k][patch_slice],
+                'target': self.targets[k, n][patch_slice]
+            }
+            
+            # Additional validation
+            if torch.isnan(item['target']).any():
+                raise ValueError("NaN values found in target patch")
+            if torch.all(item['target'] == 0):
+                raise ValueError("Completely black patch found")
+            
+            # Validate output shapes
+            pH, pW = self.patch_size
+            assert item['distances'].shape == (pH, pW), f"Invalid distances shape: {item['distances'].shape}"
+            assert item['cosines'].shape == (pH, pW), f"Invalid cosines shape: {item['cosines'].shape}"
+            assert item['albedo'].shape == (pH, pW, 3), f"Invalid albedo shape: {item['albedo'].shape}"
+            assert item['normals'].shape == (pH, pW, 3), f"Invalid normals shape: {item['normals'].shape}"
+            assert item['target'].shape == (pH, pW, 3), f"Invalid target shape: {item['target'].shape}"
+            
+            return item
+            
+        except Exception as e:
+            print(f"Error getting item {idx}: {e}")
+            print(f"Patch info - k: {k}, n: {n}, i: {i}, j: {j}")
+            raise e
+
+class ResidualBlock2D(nn.Module):
+    def __init__(self, in_channels, out_channels, dilation=1):
+        super(ResidualBlock2D, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=dilation, dilation=dilation)
+        self.in1 = nn.InstanceNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=dilation, dilation=dilation)
+        self.in2 = nn.InstanceNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+            nn.InstanceNorm2d(out_channels)
+        ) if in_channels != out_channels else None
+
+    def forward(self, x):
+        identity = x
+        out = self.conv1(x)
+        out = self.in1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.in2(out)
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        out += identity
+        out = self.relu(out)
+        return out
+
+class AttentionBlock2D(nn.Module):
+    def __init__(self, in_channels):
+        super(AttentionBlock2D, self).__init__()
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Linear(in_channels, in_channels // 16)
+        self.fc2 = nn.Linear(in_channels // 16, in_channels)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        gap = self.gap(x).view(x.size(0), -1)
+        fc1 = self.fc1(gap)
+        fc2 = self.fc2(torch.relu(fc1))
+        attention = self.sigmoid(fc2).view(x.size(0), x.size(1), 1, 1)
+        return x * attention
+    
+class DenseResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DenseResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels//2, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels + out_channels//2, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels//2)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.prelu = nn.PReLU()
+        
+    def forward(self, x):
+        out1 = self.prelu(self.bn1(self.conv1(x)))
+        out2 = self.prelu(self.bn2(self.conv2(torch.cat([x, out1], dim=1))))
+        return out2
+
+class DetailEnhancementBranch(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DetailEnhancementBranch, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(32, out_channels, kernel_size=3, padding=1)
+        self.attention = SpatialAttention()
+        
+    def forward(self, x):
+        detail = self.conv1(x)
+        detail = self.conv2(detail)
+        detail = self.attention(detail)
+        return self.conv3(detail)
+
+class SpatialAttention(nn.Module):
+    def __init__(self):
+        super(SpatialAttention, self).__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3)
+        
+    def forward(self, x):
+        avg_pool = torch.mean(x, dim=1, keepdim=True)
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)
+        attention = torch.cat([avg_pool, max_pool], dim=1)
+        attention = torch.sigmoid(self.conv(attention))
+        return x * attention
+
+class RelightingModel(nn.Module):
+    def __init__(self, albedo_channels):
+        super(RelightingModel, self).__init__()
+        
+        # Initial convolutions with increased channels
+        self.conv_distances = nn.Conv2d(1, 96, kernel_size=3, padding=1)
+        self.conv_cosines = nn.Conv2d(1, 96, kernel_size=3, padding=1)
+        self.conv_albedo = nn.Conv2d(albedo_channels, 48, kernel_size=3, padding=1)
+        self.conv_normals = nn.Conv2d(3, 48, kernel_size=3, padding=1)
+        
+        # Batch normalization layers
+        self.bn_distances = nn.BatchNorm2d(96)
+        self.bn_cosines = nn.BatchNorm2d(96)
+        self.bn_albedo = nn.BatchNorm2d(48)
+        self.bn_normals = nn.BatchNorm2d(48)
+        
+        # Activation function
+        self.prelu = nn.PReLU()
+        
+        # Multi-scale processing
+        self.conv_distances_small = nn.Conv2d(96, 48, kernel_size=1)
+        self.conv_distances_large = nn.Conv2d(96, 48, kernel_size=5, padding=2)
+        self.conv_cosines_small = nn.Conv2d(96, 48, kernel_size=1)
+        self.conv_cosines_large = nn.Conv2d(96, 48, kernel_size=5, padding=2)
+        
+        # Encoder
+        self.encoder1 = ResidualBlock2D(288, 128)  # 48*6 = 288 (concatenated features)
+        self.encoder2 = ResidualBlock2D(128, 256)
+        self.encoder3 = ResidualBlock2D(256, 512)
+        self.encoder4 = ResidualBlock2D(512, 1024)
+        
+        # Bridge
+        self.bridge = AttentionBlock2D(1024)
+        
+        # Decoder
+        self.decoder3 = ResidualBlock2D(1536, 512)  # 1024 + 512 = 1536
+        self.decoder2 = ResidualBlock2D(768, 256)   # 512 + 256 = 768
+        self.decoder1 = ResidualBlock2D(384, 128)   # 256 + 128 = 384
+        
+        # Final convolutions
+        self.final_conv1 = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.PReLU()
+        )
+        
+        self.final_conv2 = nn.Sequential(
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.PReLU()
+        )
+        
+        self.final_conv3 = nn.Conv2d(32, 3, kernel_size=1)
+        
+        # Pooling and upsampling
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def ensure_size_match(self, x, target):
+        """Ensure x matches target size"""
+        if x.shape[2:] != target.shape[2:]:
+            x = nn.functional.interpolate(x, size=target.shape[2:], mode='bilinear', align_corners=True)
+        return x
+
+    def forward(self, distances, cosines, albedo, normals):
+        # Store original size
+        original_size = (distances.shape[1], distances.shape[2])
+        
+        # Reshape inputs to add channel dimension
+        distances = distances.unsqueeze(1)
+        cosines = cosines.unsqueeze(1)
+        albedo = albedo.permute(0, 3, 1, 2)
+        normals = normals.permute(0, 3, 1, 2)
+        
+        # Initial processing with batch norm
+        x1 = self.prelu(self.bn_distances(self.conv_distances(distances)))
+        x2 = self.prelu(self.bn_cosines(self.conv_cosines(cosines)))
+        x3 = self.prelu(self.bn_albedo(self.conv_albedo(albedo)))
+        x4 = self.prelu(self.bn_normals(self.conv_normals(normals)))
+        
+        # Multi-scale processing for distances and cosines
+        x1_small = self.conv_distances_small(x1)
+        x1_large = self.conv_distances_large(x1)
+        x2_small = self.conv_cosines_small(x2)
+        x2_large = self.conv_cosines_large(x2)
+        
+        # Concatenate all features
+        x = torch.cat([x1_small, x1_large, x2_small, x2_large, x3, x4], dim=1)
+        
+        # Encoder
+        e1 = self.encoder1(x)
+        e2 = self.encoder2(self.pool(e1))
+        e3 = self.encoder3(self.pool(e2))
+        e4 = self.encoder4(self.pool(e3))
+        
+        # Bridge with attention
+        bridge = self.bridge(e4)
+        
+        # Decoder with skip connections
+        d3_up = self.upsample(bridge)
+        d3_up = self.ensure_size_match(d3_up, e3)
+        d3 = self.decoder3(torch.cat([d3_up, e3], dim=1))
+        
+        d2_up = self.upsample(d3)
+        d2_up = self.ensure_size_match(d2_up, e2)
+        d2 = self.decoder2(torch.cat([d2_up, e2], dim=1))
+        
+        d1_up = self.upsample(d2)
+        d1_up = self.ensure_size_match(d1_up, e1)
+        d1 = self.decoder1(torch.cat([d1_up, e1], dim=1))
+        
+        # Final convolutions
+        out = self.final_conv1(d1)
+        out = self.final_conv2(out)
+        out = self.final_conv3(out)
+        
+        # Ensure output size matches input size
+        out = nn.functional.interpolate(out, size=original_size, mode='bilinear', align_corners=True)
+        
+        # Reshape output to match target shape (N, H, W, 3)
+        out = out.permute(0, 2, 3, 1)
+        
+        intermediates = {
+            'e1': e1, 'e2': e2, 'e3': e3, 'e4': e4,
+            'd3': d3, 'd2': d2, 'd1': d1,
+            'final': out
+        }
+        
+        return out, intermediates
+    
+
+def visualize_output(model, val_loader, device):
+    # Get a random batch from the validation set
+    batch = next(iter(val_loader))
+    
+    # Select a random sample from the batch
+    idx = random.randint(0, batch['distances'].shape[0] - 1)
+    
+    distances = batch['distances'][idx:idx+1].to(device)
+    cosines = batch['cosines'][idx:idx+1].to(device)
+    albedo = batch['albedo'][idx:idx+1].to(device)
+    normals = batch['normals'][idx:idx+1].to(device)
+    target = batch['target'][idx:idx+1].to(device)
+
+    model.eval()
+    with torch.no_grad():
+        output, _ = model(distances, cosines, albedo, normals)
+
+    # Convert tensors to numpy arrays for plotting
+    output = output.cpu().numpy()[0]
+    target = target.cpu().numpy()[0]
+
+    # Create a figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Plot the ground truth
+    ax1.imshow(target)
+    ax1.set_title('Ground Truth')
+    ax1.axis('off')
+
+    # Plot the model output
+    ax2.imshow(output)
+    ax2.set_title('Model Output')
+    ax2.axis('off')
+
+    plt.tight_layout()
+    return fig
+
+def visualize_comparisons(model, val_loader, device, num_samples=10):
+    model.eval()
+    originals = []
+    reconstructed = []
+    
+    with torch.no_grad():
+        for batch in val_loader:
+            distances = batch['distances'].to(device)
+            cosines = batch['cosines'].to(device)
+            albedo = batch['albedo'].to(device)
+            normals = batch['normals'].to(device)
+            targets = batch['target'].to(device)
+
+            outputs, _ = model(distances, cosines, albedo, normals)
+
+            # Convert tensors to numpy arrays and change from BGR to RGB
+            originals.extend([img[:,:,::-1] for img in targets.cpu().numpy()])
+            reconstructed.extend([img[:,:,::-1] for img in outputs.cpu().numpy()])
+
+            if len(originals) >= num_samples:
+                break
+
+    # Trim to the desired number of samples
+    originals = originals[:num_samples]
+    reconstructed = reconstructed[:num_samples]
+
+    return originals, reconstructed
+
+def save_comparison_images(model, val_loader, device, epoch, model_save_path, num_samples=10):
+    model.eval()
+    
+    with torch.no_grad():
+        for batch in val_loader:
+            distances = batch['distances'].to(device)
+            cosines = batch['cosines'].to(device)
+            albedo = batch['albedo'].to(device)
+            normals = batch['normals'].to(device)
+            targets = batch['target'].to(device)
+
+            outputs, _ = model(distances, cosines, albedo, normals)
+
+            # Convert tensors to numpy arrays
+            originals = targets.cpu().numpy()
+            reconstructed = outputs.cpu().numpy()
+
+            # Calculate number of rows needed
+            num_rows = math.ceil(min(num_samples, originals.shape[0]) / 2)
+
+            # Create a single figure for all samples
+            fig, axes = plt.subplots(num_rows, 4, figsize=(20, 5*num_rows))
+            fig.suptitle(f'Comparison at Epoch {epoch}', fontsize=16)
+
+            for i in range(min(num_samples, originals.shape[0])):
+                row = i // 2
+                col = (i % 2) * 2
+
+                # Normalize and convert original image from BGR to RGB
+                original_img = originals[i]
+                original_img = (original_img - original_img.min()) / (original_img.max() - original_img.min())
+                original_img = original_img[..., ::-1]  # BGR to RGB
+
+                # Normalize and convert reconstructed image from BGR to RGB
+                reconstructed_img = reconstructed[i]
+                reconstructed_img = (reconstructed_img - reconstructed_img.min()) / (reconstructed_img.max() - reconstructed_img.min())
+                reconstructed_img = reconstructed_img[..., ::-1]  # BGR to RGB
+
+                # Plot original image
+                axes[row, col].imshow(original_img)
+                axes[row, col].set_title(f'Original {i+1}')
+                axes[row, col].axis('off')
+
+                # Plot reconstructed image
+                axes[row, col+1].imshow(reconstructed_img)
+                axes[row, col+1].set_title(f'Reconstructed {i+1}')
+                axes[row, col+1].axis('off')
+
+            # Remove any unused subplots
+            for i in range(min(num_samples, originals.shape[0]), num_rows*2):
+                row = i // 2
+                col = (i % 2) * 2
+                axes[row, col].axis('off')
+                axes[row, col+1].axis('off')
+
+            plt.tight_layout()
+            plt.savefig(os.path.join(model_save_path, f'comparison_epoch_{epoch}.png'), dpi=300, bbox_inches='tight')
+            plt.close(fig)
+
+            break  # Only process one batch
+
+def plot_losses(train_losses, val_losses, epoch, model_save_path):
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'Training and Validation Losses up to Epoch {epoch}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch}.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path='.'):
+    # Check if CUDA is available
+    if torch.cuda.is_available():
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        # Use DataParallel if multiple GPUs are available
+        if torch.cuda.device_count() > 1:
+            model = nn.DataParallel(model)
+        device = torch.device("cuda")        
+    else:
+        print("Using CPU")
+        device = torch.device("cpu")
+    model = model.to(device)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    # For 3-channel images with perceptual loss
+    criterion = CombinedLoss(use_perceptual=True, input_channels=3)
+
+    # For single-channel images without perceptual loss
+    # criterion = CombinedLoss(use_perceptual=False, input_channels=1)
+
+    criterion.to(device)
+    
+    
+    optimizer = None
+    scheduler = None
+    if params.OPTIMIZER == "Adam":
+        # Option 1: Adam with gradient clipping and cyclic learning rate
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=params.WEIGHT_DECAY
+        )
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scheduler = optim.lr_scheduler.CyclicLR(
+            optimizer,
+            base_lr=params.LEARNING_RATE / 10,
+            max_lr=params.LEARNING_RATE,
+            cycle_momentum=False
+        )
+
+    elif params.OPTIMIZER == "AdamW":
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=params.WEIGHT_DECAY,
+            amsgrad=True  # Uses the maximum of past squared gradients
+        )
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=params.EPOCHS_PER_CYCLE,
+            T_mult=2
+        )
+    elif params.OPTIMIZER == "Lion":
+        # Requires: pip install lion-pytorch
+        from lion_pytorch import Lion
+        optimizer = Lion(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            weight_decay=params.WEIGHT_DECAY,
+            beta1=0.9,
+            beta2=0.99
+        )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=3,
+            verbose=True,
+            min_lr=1e-6
+        )
+    elif params.OPTIMIZER == "RAdam":
+        optimizer = optim.RAdam(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=params.WEIGHT_DECAY
+        )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=3,
+            verbose=True,
+            min_lr=1e-6
+        )
+    elif params.OPTIMIZER == "AdaBelief":
+    # Requires: pip install adabelief-pytorch
+        from adabelief_pytorch import AdaBelief
+        optimizer = AdaBelief(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            eps=1e-16,
+            betas=(0.9, 0.999),
+            weight_decay=params.WEIGHT_DECAY,
+            weight_decouple=True,
+            rectify=False
+        )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=3,
+            verbose=True,
+            min_lr=1e-6
+        )
+
+    elif params.OPTIMIZER == "SGD":
+        # SGD with momentum and Nesterov acceleration
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=params.LEARNING_RATE,
+            momentum=0.9,  # High momentum for stable training
+            weight_decay=params.WEIGHT_DECAY,
+            nesterov=True  # Nesterov accelerated gradient for better convergence
+        )
+        
+        # Option 1: OneCycleLR - works very well with SGD
+        scheduler = optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=params.LEARNING_RATE,
+            epochs=params.RTI_NET_EPOCHS,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,  # Spend 30% of time warming up
+            div_factor=25,  # initial_lr = max_lr/25
+            final_div_factor=1e4,  # final_lr = initial_lr/1e4
+            three_phase=True,  # Use three-phase learning rate schedule
+            anneal_strategy='cos'  # Cosine annealing
+        )
+
+    train_losses = []
+    val_losses = []
+
+
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0.0
+        # Print GPU stats at the start of each epoch
+        print_gpu_stats(epoch, 0, len(train_loader))
+
+        for batch_idx, batch in enumerate(train_loader):
+            distances = batch['distances'].to(device)
+            cosines = batch['cosines'].to(device)
+            albedo = batch['albedo'].to(device)
+            normals = batch['normals'].to(device)
+            targets = batch['target'].to(device)
+
+            # Check for invalid values in inputs
+            if (torch.isnan(distances).any() or torch.isnan(cosines).any() or 
+                torch.isnan(albedo).any() or torch.isnan(normals).any() or 
+                torch.isnan(targets).any()):
+                print(f"Warning: NaN detected in input batch {batch_idx}")
+                continue
+
+            optimizer.zero_grad()
+            outputs, _ = model(distances, cosines, albedo, normals)
+            tot_loss, losses = criterion(outputs, targets)
+            tot_loss.backward()
+            optimizer.step()
+            train_loss += tot_loss.item()
+
+            # # Print GPU stats every N batches
+            # if batch_idx % params.BATCH_SIZE == 0:  # Adjust frequency as needed
+            #     print_gpu_stats(epoch, batch_idx, len(train_loader))
+                
+            # # Clear cache periodically if needed
+            # if batch_idx % params.BATCH_SIZE == 0:  # Adjust frequency as needed
+            #     torch.cuda.empty_cache()
+
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                distances = batch['distances'].to(device)
+                cosines = batch['cosines'].to(device)
+                albedo = batch['albedo'].to(device)
+                normals = batch['normals'].to(device)
+                targets = batch['target'].to(device)
+
+                outputs, _ = model(distances, cosines, albedo, normals)
+                loss, _= criterion(outputs, targets)
+                val_loss += loss.item()
+
+        train_loss /= len(train_loader)
+        val_loss /= len(val_loader)
+
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        
+        print("Epoch {}/{}, Train Loss: {:.4f}, Val Loss: {:.4f}".format(
+            epoch+1, num_epochs, train_loss, val_loss))
+        
+        # Save comparison images every N epochs
+        if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
+            save_comparison_images(model, val_loader, device, epoch + 1, model_save_path)
+            plot_losses(train_losses, val_losses, epoch + 1, model_save_path)
+
+        scheduler.step(val_loss)
+
+        # Save model every N epochs
+        if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
+            save_path = os.path.join(model_save_path, 'relighting_model_epoch_{}.pth'.format(epoch+1))
+            torch.save(model.state_dict(), save_path)
+            print("Model saved at epoch {}".format(epoch+1))
+
+    return model
+
+
+def prepare_data(distances, cosines, albedo, normals, targets):
+    # Splitting the data
+    K = distances.shape[0]
+    N = distances.shape[1]
+    train_distances = []
+    val_distances = []
+    train_cosines = []
+    val_cosines = []
+    train_targets = []   
+    val_targets = []
+
+    for i in range(K):
+        train_indices, val_indices = train_test_split(
+            np.arange(N), 
+            test_size=0.2, 
+            random_state=42
+        )
+        train_distances.append(distances[i, train_indices, :, :])
+        val_distances.append(distances[i, val_indices, :, :])
+        train_cosines.append(cosines[i, train_indices, :, :])
+        val_cosines.append(cosines[i, val_indices, :, :])
+        train_targets.append(targets[i, train_indices, :, :, :])
+        val_targets.append(targets[i, val_indices, :, :, :])
+
+    print("Train distances shape: ", np.array(train_distances).shape,
+          "Val distances shape: ", np.array(val_distances).shape,
+          "Train cosines shape: ", np.array(train_cosines).shape,
+          "Val cosines shape: ", np.array(val_cosines).shape,
+          "Train targets shape: ", np.array(train_targets).shape,
+          "Val targets shape: ", np.array(val_targets).shape)
+
+    # Create datasets
+    train_dataset = PatchRelightingDataset(
+        train_distances, train_cosines,
+        albedo, normals,
+        train_targets
+    )
+    val_dataset = PatchRelightingDataset(
+        val_distances, val_cosines,
+        albedo, normals,
+        val_targets
+    )
+
+    # Create data loaders
+    train_loader = DataLoader(train_dataset, 
+                              batch_size=params.BATCH_SIZE, 
+                              shuffle=params.TRAIN_SHUFFLE, 
+                              num_workers=params.NUM_WORKERS,
+                              persistent_workers=params.PERSISTENT_WORKER,
+                              pin_memory=params.PIN_MEMORY,
+                              prefetch_factor=params.PREFETCH_FACTOR)
+    val_loader = DataLoader(val_dataset, 
+                            batch_size=params.BATCH_SIZE, 
+                            shuffle=params.VAL_SHUFFLE, 
+                            num_workers=params.NUM_WORKERS,
+                            persistent_workers=params.PERSISTENT_WORKER,
+                            pin_memory=params.PIN_MEMORY,
+                            prefetch_factor=params.PREFETCH_FACTOR)
+
+    return train_loader, val_loader, train_indices, val_indices
+
+def create_numbered_folder(base_path):
+    # Get current date and time
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Find existing folders that match the pattern
+    base_name = "saved_models"
+    existing_folders = [d for d in os.listdir(os.path.dirname(base_path)) 
+                       if os.path.isdir(os.path.join(os.path.dirname(base_path), d)) 
+                       and d.startswith(base_name)]
+    
+    # Find the next available number
+    max_num = -1
+    for folder in existing_folders:
+        try:
+            num = int(folder.split('_')[2])  # Assuming format: saved_models_XX_date_time
+            max_num = max(max_num, num)
+        except (IndexError, ValueError):
+            continue
+    
+    # Create new folder name with next number
+    new_num = str(max_num + 1).zfill(2)  # Pad with zeros to get XX format
+    folder_name = f"{base_name}_{new_num}_{current_time}"
+    
+    # Create full path
+    full_path = os.path.join(os.path.dirname(base_path), folder_name)
+    os.makedirs(full_path, exist_ok=True)
+
+    return full_path
+
+
+def train(distances, cosines, albedo, normals, targets):
+    print("Going to train..")    
+    
+    distances = np.array(distances)
+    cosines = np.array(cosines)
+    albedo = np.array(albedo)
+    normals = np.array(normals)
+    targets = np.array(targets)
+
+    print("Input shapes - distances: ", distances.shape, "cosines: ", cosines.shape, 
+          "albedo: ", albedo.shape, "normals: ", normals.shape, "targets: ", targets.shape)
+    
+    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models", "saved_model")
+    model_save_path = create_numbered_folder(model_save_path)
+    # Copy a file to the folder
+    shutil.copy2('./utils/params.py', model_save_path)
+
+    # Prepare data
+    print("Preparing data..")
+    train_loader, val_loader, train_indices, val_indices = prepare_data(distances, cosines, albedo, normals, targets)
+
+    np.save(os.path.join(model_save_path, 'train_indices.npy'), train_indices)
+    np.save(os.path.join(model_save_path, 'val_indices.npy'), val_indices)
+
+    # Initialize the model
+    print("Initializing model..")
+    albedo_channels = albedo.shape[-1]
+    model = RelightingModel(albedo_channels=albedo_channels)
+
+    # Train the model
+    print("Training the model..")
+    trained_model = train_model(model, train_loader, val_loader, num_epochs=params.RTI_NET_EPOCHS, model_save_path=model_save_path)
+
+    # Save the final model
+    torch.save(trained_model.state_dict(), os.path.join(model_save_path, 'relighting_model_final.pth'))
+
+    print("Training completed and model saved.")
