@@ -28,8 +28,8 @@ def duplicate_folder_and_crop_images(folder_path, x, y, width, height):
     print(f"Folder duplicated and images cropped. New folder: {new_folder_path}")
 
 # Example usage
-folder_path = r"/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG"  
-x, y, width, height = 0, 0 , 608, 512  # Replace with your desired crop values
+folder_path = r"/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG"  
+x, y, width, height = 2, 0 , 608, 512  # Replace with your desired crop values
 
 duplicate_folder_and_crop_images(folder_path, x, y, width, height)
 

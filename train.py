@@ -1151,6 +1151,9 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+
+        # Add this line to store validation losses in the model
+        model.val_losses = val_losses
         
         print("Epoch {}/{}, Train Loss: {:.4f}, Val Loss: {:.4f}".format(
             epoch+1, num_epochs, train_loss, val_loss))
@@ -1185,7 +1188,7 @@ def prepare_data(distances, cosines, albedo, normals, targets):
     for i in range(K):
         train_indices, val_indices = train_test_split(
             np.arange(N), 
-            test_size=0.2, 
+            test_size=params.TRAIN_VAL_SPLIT, 
             random_state=42
         )
         train_distances.append(distances[i, train_indices, :, :])

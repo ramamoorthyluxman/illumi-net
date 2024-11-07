@@ -221,9 +221,9 @@ def convert_normal_map_to_npy(png_path):
     
 
     
-# crop_and_save_image(r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/Normal_gt.png',2,0,608,512)
-# apply_mask_to_image(r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG_sub_images/albedo.png', '/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG_sub_images/mask.png')
+# crop_and_save_image(r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG/Normal_gt.png',2,0,608,512)
+# apply_mask_to_image(r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG/albedo.png', '/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG/mask.png')
 
 # convert_normal_map_to_npy(r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/normal_map.png')
 
-process_lp_and_apply_mask(r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG', r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/mask.png', output_folder=None)
+process_lp_and_apply_mask(r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG', r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG/mask.png', output_folder=None)
