@@ -426,13 +426,15 @@ class CombinedLoss(nn.Module):
         return total_loss, losses
     
 class PatchRelightingDataset(Dataset):
-    def __init__(self, distances, cosines, albedo, normals, targets):
+    def __init__(self, distances, cosines, albedo, normals, azimuths, elevations, targets):
         # Convert inputs to numpy arrays if they aren't already
         distances = np.array(distances)
         cosines = np.array(cosines)
         albedo = np.array(albedo)
         normals = np.array(normals)
         targets = np.array(targets)
+        azimuths = np.array(azimuths)  # Shape: [K, N]
+        elevations = np.array(elevations)  # Shape: [K, N]
         
         # Validate input shapes
         K, N, H, W = distances.shape
@@ -440,6 +442,8 @@ class PatchRelightingDataset(Dataset):
         assert albedo.shape == (K, H, W, 3), f"Albedo shape {albedo.shape} doesn't match expected shape {(K, H, W, 3)}"
         assert normals.shape == (K, H, W, 3), f"Normals shape {normals.shape} doesn't match expected shape {(K, H, W, 3)}"
         assert targets.shape == (K, N, H, W, 3), f"Targets shape {targets.shape} doesn't match expected shape {(K, N, H, W, 3)}"
+        assert azimuths.shape == (K, N), f"Azimuths shape {azimuths.shape} doesn't match expected shape {(K, N)}"
+        assert elevations.shape == (K, N), f"Elevations shape {elevations.shape} doesn't match expected shape {(K, N)}"
         
         # Convert to torch tensors
         self.distances = torch.FloatTensor(distances)
@@ -447,6 +451,8 @@ class PatchRelightingDataset(Dataset):
         self.albedo = torch.FloatTensor(albedo)
         self.normals = torch.FloatTensor(normals)
         self.targets = torch.FloatTensor(targets)
+        self.azimuths = torch.FloatTensor(azimuths)
+        self.elevations = torch.FloatTensor(elevations)
         
         # Calculate patch size and number of patches
         self.patch_size, self.patches_per_image = self.calculate_patches() 
@@ -457,65 +463,56 @@ class PatchRelightingDataset(Dataset):
         print(f"Created {len(self.patches)} valid patches after filtering")
 
     def calculate_patches(self):
+        # Same as before
         print("Calculating the patches")
         patch_height, patch_width = params.RTI_NET_PATCH_SIZE
         desired_patches = params.RTI_MAX_NUMBER_PATCHES
         _, _, image_height, image_width = self.distances.shape
         
-        # Ensure patch sizes are not larger than image dimensions and are divisible by 32
         patch_height = min(patch_height, image_height)
         patch_width = min(patch_width, image_width)
         patch_height = (patch_height // 32) * 32
         patch_width = (patch_width // 32) * 32
         
-        # Ensure patches are not zero-sized
         assert patch_height > 0 and patch_width > 0, f"Invalid patch size: {patch_height}x{patch_width}"
         
-        # Calculate maximum possible patches
         max_patches_y = image_height // patch_height
         max_patches_x = image_width // patch_width
         max_patches = max_patches_y * max_patches_x
         
-        # Adjust desired patches if it exceeds maximum possible
         adjusted_patches = min(desired_patches, max_patches)
         assert adjusted_patches > 0, "No valid patches could be created"
         
         return [patch_height, patch_width], adjusted_patches
 
     def is_valid_patch(self, k, n, i, j):
-        """
-        Check if a patch contains enough non-black pixels
-        """
+        # Same validation logic as before
         patch_slice = slice(i, i + self.patch_size[0]), slice(j, j + self.patch_size[1])
         
-        # Check target image patch
         target_patch = self.targets[k, n][patch_slice]
         
-        # Calculate the percentage of non-black pixels
-        # A pixel is considered non-black if its intensity is above a threshold
-        threshold = params.PATCH_PIX_VAL_THRESHOLD   # Adjust this threshold as needed
+        threshold = params.PATCH_PIX_VAL_THRESHOLD
         non_black_pixels = torch.sum(torch.max(target_patch, dim=2)[0] > threshold)
         total_pixels = self.patch_size[0] * self.patch_size[1]
         non_black_ratio = non_black_pixels / total_pixels
         
-        # Check if the patch also has valid normals and albedo
         normal_patch = self.normals[k][patch_slice]
         albedo_patch = self.albedo[k][patch_slice]
         
         has_valid_normals = torch.sum(torch.abs(normal_patch) > threshold) > 0
         has_valid_albedo = torch.sum(torch.abs(albedo_patch) > threshold) > 0
         
-        # Define minimum required ratio of non-black pixels
-        required_ratio = params.NON_BLACK_PIX_RATIO_MIN  # Adjust this value based on your needs
+        required_ratio = params.NON_BLACK_PIX_RATIO_MIN
         
         return (non_black_ratio > required_ratio and 
                 has_valid_normals and 
                 has_valid_albedo)
 
     def _create_valid_patches(self):
+        # Same as before
         patches = []
         attempted_patches = 0
-        max_attempts = self.patches_per_image * 3  # Allow for extra attempts to find valid patches
+        max_attempts = self.patches_per_image * 3
         K, N, H, W = self.distances.shape
         grid_size = math.isqrt(self.patches_per_image)
         cell_h, cell_w = H // grid_size, W // grid_size
@@ -528,27 +525,22 @@ class PatchRelightingDataset(Dataset):
                 attempts = 0
                 
                 while valid_patches_count < self.patches_per_image and attempts < max_attempts:
-                    # Randomly select a grid cell
                     i = random.randint(0, grid_size - 1)
                     j = random.randint(0, grid_size - 1)
                     
-                    # Calculate the range for this grid cell
                     h_start = i * cell_h
                     h_end = min((i + 1) * cell_h, H) - self.patch_size[0]
                     w_start = j * cell_w
                     w_end = min((j + 1) * cell_w, W) - self.patch_size[1]
                     
-                    # Ensure valid ranges
                     h_start = max(0, h_start)
                     h_end = max(h_start, h_end)
                     w_start = max(0, w_start)
                     w_end = max(w_start, w_end)
                     
-                    # Randomly select a patch within this grid cell
                     h = random.randint(h_start, h_end)
                     w = random.randint(w_start, w_end)
                     
-                    # Check if the patch is valid
                     if self.is_valid_patch(k, n, h, w):
                         patches.append((k, n, h, w))
                         valid_patches_count += 1
@@ -563,8 +555,6 @@ class PatchRelightingDataset(Dataset):
                     print(f"Warning: Could only find {valid_patches_count} valid patches for image {k}, view {n}")
         
         print(f"Created {len(patches)} valid patches out of {attempted_patches} attempts")
-        
-        # Verify we have patches
         assert len(patches) > 0, "No valid patches were created"
         return patches
 
@@ -584,22 +574,25 @@ class PatchRelightingDataset(Dataset):
                 'cosines': self.cosines[k, n][patch_slice],
                 'albedo': self.albedo[k][patch_slice],
                 'normals': self.normals[k][patch_slice],
+                'azimuth': self.azimuths[k, n],  # Single value for the whole patch
+                'elevation': self.elevations[k, n],  # Single value for the whole patch
                 'target': self.targets[k, n][patch_slice]
             }
             
-            # Additional validation
+            # Validation
             if torch.isnan(item['target']).any():
                 raise ValueError("NaN values found in target patch")
             if torch.all(item['target'] == 0):
                 raise ValueError("Completely black patch found")
             
-            # Validate output shapes
             pH, pW = self.patch_size
             assert item['distances'].shape == (pH, pW), f"Invalid distances shape: {item['distances'].shape}"
             assert item['cosines'].shape == (pH, pW), f"Invalid cosines shape: {item['cosines'].shape}"
             assert item['albedo'].shape == (pH, pW, 3), f"Invalid albedo shape: {item['albedo'].shape}"
             assert item['normals'].shape == (pH, pW, 3), f"Invalid normals shape: {item['normals'].shape}"
             assert item['target'].shape == (pH, pW, 3), f"Invalid target shape: {item['target'].shape}"
+            assert isinstance(item['azimuth'].item(), float), "Invalid azimuth type"
+            assert isinstance(item['elevation'].item(), float), "Invalid elevation type"
             
             return item
             
@@ -607,6 +600,7 @@ class PatchRelightingDataset(Dataset):
             print(f"Error getting item {idx}: {e}")
             print(f"Patch info - k: {k}, n: {n}, i: {i}, j: {j}")
             raise e
+        
 
 class ResidualBlock2D(nn.Module):
     def __init__(self, in_channels, out_channels, dilation=1):
@@ -693,11 +687,20 @@ class RelightingModel(nn.Module):
     def __init__(self, albedo_channels):
         super(RelightingModel, self).__init__()
         
-        # Initial convolutions with increased channels
+        # Initial convolutions for image-sized features
         self.conv_distances = nn.Conv2d(1, 96, kernel_size=3, padding=1)
         self.conv_cosines = nn.Conv2d(1, 96, kernel_size=3, padding=1)
         self.conv_albedo = nn.Conv2d(albedo_channels, 48, kernel_size=3, padding=1)
         self.conv_normals = nn.Conv2d(3, 48, kernel_size=3, padding=1)
+        
+        # Angle Processing Network
+        self.angle_encoder = nn.Sequential(
+            nn.Linear(2, 32),
+            nn.ReLU(),
+            nn.Linear(32, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64)
+        )
         
         # Batch normalization layers
         self.bn_distances = nn.BatchNorm2d(96)
@@ -714,8 +717,9 @@ class RelightingModel(nn.Module):
         self.conv_cosines_small = nn.Conv2d(96, 48, kernel_size=1)
         self.conv_cosines_large = nn.Conv2d(96, 48, kernel_size=5, padding=2)
         
-        # Encoder
-        self.encoder1 = ResidualBlock2D(288, 128)  # 48*6 = 288 (concatenated features)
+        # Encoder (increased channels to accommodate angle features)
+        total_channels = 48*6 + 64  # Original channels (48*6) + angle features (64)
+        self.encoder1 = ResidualBlock2D(total_channels, 128)
         self.encoder2 = ResidualBlock2D(128, 256)
         self.encoder3 = ResidualBlock2D(256, 512)
         self.encoder4 = ResidualBlock2D(512, 1024)
@@ -747,17 +751,26 @@ class RelightingModel(nn.Module):
         self.pool = nn.MaxPool2d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
+        self.dropout = nn.Dropout(0.2)  # Add dropout
+
     def ensure_size_match(self, x, target):
-        """Ensure x matches target size"""
         if x.shape[2:] != target.shape[2:]:
             x = nn.functional.interpolate(x, size=target.shape[2:], mode='bilinear', align_corners=True)
         return x
 
-    def forward(self, distances, cosines, albedo, normals):
+    def forward(self, distances, cosines, albedo, normals, azimuth, elevation):
         # Store original size
         original_size = (distances.shape[1], distances.shape[2])
         
-        # Reshape inputs to add channel dimension
+        # Process angular features
+        angles = torch.stack([azimuth, elevation], dim=1)  # Shape: [B, 2]
+        angle_features = self.angle_encoder(angles)  # Shape: [B, 64]
+        
+        # Expand angle features to match spatial dimensions
+        B = angles.shape[0]
+        angle_features = angle_features.view(B, -1, 1, 1).expand(-1, -1, original_size[0], original_size[1])
+        
+        # Process other inputs
         distances = distances.unsqueeze(1)
         cosines = cosines.unsqueeze(1)
         albedo = albedo.permute(0, 3, 1, 2)
@@ -769,14 +782,20 @@ class RelightingModel(nn.Module):
         x3 = self.prelu(self.bn_albedo(self.conv_albedo(albedo)))
         x4 = self.prelu(self.bn_normals(self.conv_normals(normals)))
         
-        # Multi-scale processing for distances and cosines
+        # Multi-scale processing
         x1_small = self.conv_distances_small(x1)
         x1_large = self.conv_distances_large(x1)
         x2_small = self.conv_cosines_small(x2)
         x2_large = self.conv_cosines_large(x2)
         
-        # Concatenate all features
-        x = torch.cat([x1_small, x1_large, x2_small, x2_large, x3, x4], dim=1)
+        # Concatenate all features including angle features
+        x = torch.cat([x1_small, x1_large, x2_small, x2_large, x3, x4, angle_features], dim=1)
+
+        # Add dropout before encoder stages
+        x = self.dropout(x)
+        e1 = self.encoder1(x)
+        e1 = self.dropout(e1)
+        e2 = self.encoder2(self.pool(e1))
         
         # Encoder
         e1 = self.encoder1(x)
@@ -831,18 +850,20 @@ def visualize_output(model, val_loader, device):
     cosines = batch['cosines'][idx:idx+1].to(device)
     albedo = batch['albedo'][idx:idx+1].to(device)
     normals = batch['normals'][idx:idx+1].to(device)
+    azimuth = batch['azimuth'][idx:idx+1].to(device)
+    elevation = batch['elevation'][idx:idx+1].to(device)
     target = batch['target'][idx:idx+1].to(device)
 
     model.eval()
     with torch.no_grad():
-        output, _ = model(distances, cosines, albedo, normals)
+        output, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
 
     # Convert tensors to numpy arrays for plotting
     output = output.cpu().numpy()[0]
     target = target.cpu().numpy()[0]
 
-    # Create a figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    # Create a figure with subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
 
     # Plot the ground truth
     ax1.imshow(target)
@@ -854,6 +875,25 @@ def visualize_output(model, val_loader, device):
     ax2.set_title('Model Output')
     ax2.axis('off')
 
+    # Plot the angular information
+    ax3.set_title(f'Light Direction\nAzimuth: {azimuth.item():.2f}\nElevation: {elevation.item():.2f}')
+    ax3.set_xlim(-1, 1)
+    ax3.set_ylim(-1, 1)
+    
+    # Convert spherical to cartesian for visualization
+    x = np.cos(azimuth.item()) * np.sin(elevation.item())
+    y = np.sin(azimuth.item()) * np.sin(elevation.item())
+    z = np.cos(elevation.item())
+    
+    # Draw unit circle
+    circle = plt.Circle((0, 0), 1, fill=False, color='black')
+    ax3.add_artist(circle)
+    
+    # Plot light direction
+    ax3.arrow(0, 0, x, y, head_width=0.05, head_length=0.1, fc='r', ec='r')
+    ax3.grid(True)
+    ax3.set_aspect('equal')
+
     plt.tight_layout()
     return fig
 
@@ -861,6 +901,7 @@ def visualize_comparisons(model, val_loader, device, num_samples=10):
     model.eval()
     originals = []
     reconstructed = []
+    angles = []
     
     with torch.no_grad():
         for batch in val_loader:
@@ -868,22 +909,26 @@ def visualize_comparisons(model, val_loader, device, num_samples=10):
             cosines = batch['cosines'].to(device)
             albedo = batch['albedo'].to(device)
             normals = batch['normals'].to(device)
+            azimuth = batch['azimuth'].to(device)
+            elevation = batch['elevation'].to(device)
             targets = batch['target'].to(device)
 
-            outputs, _ = model(distances, cosines, albedo, normals)
+            outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
 
-            # Convert tensors to numpy arrays and change from BGR to RGB
+            # Convert tensors to numpy arrays
             originals.extend([img[:,:,::-1] for img in targets.cpu().numpy()])
             reconstructed.extend([img[:,:,::-1] for img in outputs.cpu().numpy()])
+            angles.extend([(az.item(), el.item()) for az, el in zip(azimuth, elevation)])
 
             if len(originals) >= num_samples:
                 break
 
-    # Trim to the desired number of samples
+    # Trim to desired number of samples
     originals = originals[:num_samples]
     reconstructed = reconstructed[:num_samples]
+    angles = angles[:num_samples]
 
-    return originals, reconstructed
+    return originals, reconstructed, angles
 
 def save_comparison_images(model, val_loader, device, epoch, model_save_path, num_samples=10):
     model.eval()
@@ -894,34 +939,38 @@ def save_comparison_images(model, val_loader, device, epoch, model_save_path, nu
             cosines = batch['cosines'].to(device)
             albedo = batch['albedo'].to(device)
             normals = batch['normals'].to(device)
+            azimuth = batch['azimuth'].to(device)
+            elevation = batch['elevation'].to(device)
             targets = batch['target'].to(device)
 
-            outputs, _ = model(distances, cosines, albedo, normals)
+            outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
 
             # Convert tensors to numpy arrays
             originals = targets.cpu().numpy()
             reconstructed = outputs.cpu().numpy()
+            azimuths = azimuth.cpu().numpy()
+            elevations = elevation.cpu().numpy()
 
             # Calculate number of rows needed
             num_rows = math.ceil(min(num_samples, originals.shape[0]) / 2)
 
             # Create a single figure for all samples
-            fig, axes = plt.subplots(num_rows, 4, figsize=(20, 5*num_rows))
+            fig, axes = plt.subplots(num_rows, 6, figsize=(30, 5*num_rows))
             fig.suptitle(f'Comparison at Epoch {epoch}', fontsize=16)
 
             for i in range(min(num_samples, originals.shape[0])):
                 row = i // 2
-                col = (i % 2) * 2
+                col = (i % 2) * 3
 
                 # Normalize and convert original image from BGR to RGB
                 original_img = originals[i]
                 original_img = (original_img - original_img.min()) / (original_img.max() - original_img.min())
-                original_img = original_img[..., ::-1]  # BGR to RGB
+                original_img = original_img[..., ::-1]
 
                 # Normalize and convert reconstructed image from BGR to RGB
                 reconstructed_img = reconstructed[i]
                 reconstructed_img = (reconstructed_img - reconstructed_img.min()) / (reconstructed_img.max() - reconstructed_img.min())
-                reconstructed_img = reconstructed_img[..., ::-1]  # BGR to RGB
+                reconstructed_img = reconstructed_img[..., ::-1]
 
                 # Plot original image
                 axes[row, col].imshow(original_img)
@@ -933,15 +982,37 @@ def save_comparison_images(model, val_loader, device, epoch, model_save_path, nu
                 axes[row, col+1].set_title(f'Reconstructed {i+1}')
                 axes[row, col+1].axis('off')
 
+                # Plot light direction
+                az = azimuths[i]
+                el = elevations[i]
+                axes[row, col+2].set_title(f'Light Direction\nAz: {az:.2f}\nEl: {el:.2f}')
+                axes[row, col+2].set_xlim(-1, 1)
+                axes[row, col+2].set_ylim(-1, 1)
+                
+                # Convert spherical to cartesian
+                x = np.cos(az) * np.sin(el)
+                y = np.sin(az) * np.sin(el)
+                z = np.cos(el)
+                
+                # Draw unit circle
+                circle = plt.Circle((0, 0), 1, fill=False, color='black')
+                axes[row, col+2].add_artist(circle)
+                
+                # Plot light direction arrow
+                axes[row, col+2].arrow(0, 0, x, y, head_width=0.05, head_length=0.1, fc='r', ec='r')
+                axes[row, col+2].grid(True)
+                axes[row, col+2].set_aspect('equal')
+
             # Remove any unused subplots
             for i in range(min(num_samples, originals.shape[0]), num_rows*2):
                 row = i // 2
-                col = (i % 2) * 2
-                axes[row, col].axis('off')
-                axes[row, col+1].axis('off')
+                col = (i % 2) * 3
+                for j in range(3):
+                    axes[row, col+j].axis('off')
 
             plt.tight_layout()
-            plt.savefig(os.path.join(model_save_path, f'comparison_epoch_{epoch}.png'), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(model_save_path, f'comparison_epoch_{epoch}.png'), 
+                       dpi=300, bbox_inches='tight')
             plt.close(fig)
 
             break  # Only process one batch
@@ -956,30 +1027,20 @@ def plot_losses(train_losses, val_losses, epoch, model_save_path):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch}.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch}.png'), 
+                dpi=300, bbox_inches='tight')
     plt.close()
 
 def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path='.'):
-    # Check if CUDA is available
-    if torch.cuda.is_available():
-        print(f"Using {torch.cuda.device_count()} GPUs")
-        # Use DataParallel if multiple GPUs are available
-        if torch.cuda.device_count() > 1:
-            model = nn.DataParallel(model)
-        device = torch.device("cuda")        
-    else:
-        print("Using CPU")
-        device = torch.device("cpu")
-    model = model.to(device)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    # For 3-channel images with perceptual loss
-    criterion = CombinedLoss(use_perceptual=True, input_channels=3)
-
-    # For single-channel images without perceptual loss
-    # criterion = CombinedLoss(use_perceptual=False, input_channels=1)
-
-    criterion.to(device)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        model = nn.DataParallel(model)
+    model = model.to(device)
+    
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    criterion = CombinedLoss(use_perceptual=True, input_channels=3).to(device)
     
     optimizer = None
     scheduler = None
@@ -1095,11 +1156,9 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     train_losses = []
     val_losses = []
 
-
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
-        # Print GPU stats at the start of each epoch
         print_gpu_stats(epoch, 0, len(train_loader))
 
         for batch_idx, batch in enumerate(train_loader):
@@ -1107,29 +1166,23 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
             cosines = batch['cosines'].to(device)
             albedo = batch['albedo'].to(device)
             normals = batch['normals'].to(device)
+            azimuth = batch['azimuth'].to(device)
+            elevation = batch['elevation'].to(device)
             targets = batch['target'].to(device)
 
-            # Check for invalid values in inputs
             if (torch.isnan(distances).any() or torch.isnan(cosines).any() or 
                 torch.isnan(albedo).any() or torch.isnan(normals).any() or 
-                torch.isnan(targets).any()):
+                torch.isnan(targets).any() or torch.isnan(azimuth).any() or
+                torch.isnan(elevation).any()):
                 print(f"Warning: NaN detected in input batch {batch_idx}")
                 continue
 
             optimizer.zero_grad()
-            outputs, _ = model(distances, cosines, albedo, normals)
+            outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
             tot_loss, losses = criterion(outputs, targets)
             tot_loss.backward()
             optimizer.step()
             train_loss += tot_loss.item()
-
-            # # Print GPU stats every N batches
-            # if batch_idx % params.BATCH_SIZE == 0:  # Adjust frequency as needed
-            #     print_gpu_stats(epoch, batch_idx, len(train_loader))
-                
-            # # Clear cache periodically if needed
-            # if batch_idx % params.BATCH_SIZE == 0:  # Adjust frequency as needed
-            #     torch.cuda.empty_cache()
 
         # Validation
         model.eval()
@@ -1140,10 +1193,12 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
                 cosines = batch['cosines'].to(device)
                 albedo = batch['albedo'].to(device)
                 normals = batch['normals'].to(device)
+                azimuth = batch['azimuth'].to(device)
+                elevation = batch['elevation'].to(device)
                 targets = batch['target'].to(device)
 
-                outputs, _ = model(distances, cosines, albedo, normals)
-                loss, _= criterion(outputs, targets)
+                outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
+                loss, _ = criterion(outputs, targets)
                 val_loss += loss.item()
 
         train_loss /= len(train_loader)
@@ -1151,30 +1206,25 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
-
-        # Add this line to store validation losses in the model
+        
         model.val_losses = val_losses
         
-        print("Epoch {}/{}, Train Loss: {:.4f}, Val Loss: {:.4f}".format(
-            epoch+1, num_epochs, train_loss, val_loss))
+        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         
-        # Save comparison images every N epochs
         if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
             save_comparison_images(model, val_loader, device, epoch + 1, model_save_path)
             plot_losses(train_losses, val_losses, epoch + 1, model_save_path)
 
         scheduler.step(val_loss)
 
-        # Save model every N epochs
         if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
-            save_path = os.path.join(model_save_path, 'relighting_model_epoch_{}.pth'.format(epoch+1))
+            save_path = os.path.join(model_save_path, f'relighting_model_epoch_{epoch+1}.pth')
             torch.save(model.state_dict(), save_path)
-            print("Model saved at epoch {}".format(epoch+1))
+            print(f"Model saved at epoch {epoch+1}")
 
     return model
 
-
-def prepare_data(distances, cosines, albedo, normals, targets):
+def prepare_data(distances, cosines, albedo, normals, azimuths, elevations, targets):
     # Splitting the data
     K = distances.shape[0]
     N = distances.shape[1]
@@ -1184,6 +1234,10 @@ def prepare_data(distances, cosines, albedo, normals, targets):
     val_cosines = []
     train_targets = []   
     val_targets = []
+    train_azimuths = []
+    val_azimuths = []
+    train_elevations = []
+    val_elevations = []
 
     for i in range(K):
         train_indices, val_indices = train_test_split(
@@ -1197,41 +1251,49 @@ def prepare_data(distances, cosines, albedo, normals, targets):
         val_cosines.append(cosines[i, val_indices, :, :])
         train_targets.append(targets[i, train_indices, :, :, :])
         val_targets.append(targets[i, val_indices, :, :, :])
+        train_azimuths.append(azimuths[i, train_indices])
+        val_azimuths.append(azimuths[i, val_indices])
+        train_elevations.append(elevations[i, train_indices])
+        val_elevations.append(elevations[i, val_indices])
 
     print("Train distances shape: ", np.array(train_distances).shape,
-          "Val distances shape: ", np.array(val_distances).shape,
-          "Train cosines shape: ", np.array(train_cosines).shape,
-          "Val cosines shape: ", np.array(val_cosines).shape,
-          "Train targets shape: ", np.array(train_targets).shape,
-          "Val targets shape: ", np.array(val_targets).shape)
+          "\nVal distances shape: ", np.array(val_distances).shape,
+          "\nTrain cosines shape: ", np.array(train_cosines).shape,
+          "\nVal cosines shape: ", np.array(val_cosines).shape,
+          "\nTrain targets shape: ", np.array(train_targets).shape,
+          "\nVal targets shape: ", np.array(val_targets).shape,
+          "\nTrain azimuths shape: ", np.array(train_azimuths).shape,
+          "\nVal azimuths shape: ", np.array(val_azimuths).shape)
 
     # Create datasets
     train_dataset = PatchRelightingDataset(
         train_distances, train_cosines,
         albedo, normals,
+        train_azimuths, train_elevations,
         train_targets
     )
     val_dataset = PatchRelightingDataset(
         val_distances, val_cosines,
         albedo, normals,
+        val_azimuths, val_elevations,
         val_targets
     )
 
     # Create data loaders
     train_loader = DataLoader(train_dataset, 
-                              batch_size=params.BATCH_SIZE, 
-                              shuffle=params.TRAIN_SHUFFLE, 
-                              num_workers=params.NUM_WORKERS,
-                              persistent_workers=params.PERSISTENT_WORKER,
-                              pin_memory=params.PIN_MEMORY,
-                              prefetch_factor=params.PREFETCH_FACTOR)
-    val_loader = DataLoader(val_dataset, 
                             batch_size=params.BATCH_SIZE, 
-                            shuffle=params.VAL_SHUFFLE, 
+                            shuffle=params.TRAIN_SHUFFLE, 
                             num_workers=params.NUM_WORKERS,
                             persistent_workers=params.PERSISTENT_WORKER,
                             pin_memory=params.PIN_MEMORY,
                             prefetch_factor=params.PREFETCH_FACTOR)
+    val_loader = DataLoader(val_dataset, 
+                          batch_size=params.BATCH_SIZE, 
+                          shuffle=params.VAL_SHUFFLE, 
+                          num_workers=params.NUM_WORKERS,
+                          persistent_workers=params.PERSISTENT_WORKER,
+                          pin_memory=params.PIN_MEMORY,
+                          prefetch_factor=params.PREFETCH_FACTOR)
 
     return train_loader, val_loader, train_indices, val_indices
 
@@ -1265,40 +1327,51 @@ def create_numbered_folder(base_path):
     return full_path
 
 
-def train(distances, cosines, albedo, normals, targets):
+def train(distances, cosines, albedo, normals, azimuths, elevations, targets):
     print("Going to train..")    
     
+    # Convert inputs to numpy arrays
     distances = np.array(distances)
     cosines = np.array(cosines)
     albedo = np.array(albedo)
     normals = np.array(normals)
+    azimuths = np.array(azimuths)
+    elevations = np.array(elevations)
     targets = np.array(targets)
 
-    print("Input shapes - distances: ", distances.shape, "cosines: ", cosines.shape, 
-          "albedo: ", albedo.shape, "normals: ", normals.shape, "targets: ", targets.shape)
+    print("Input shapes:",
+          "\ndistances:", distances.shape,
+          "\ncosines:", cosines.shape,
+          "\nalbedo:", albedo.shape,
+          "\nnormals:", normals.shape,
+          "\nazimuths:", azimuths.shape,
+          "\nelevations:", elevations.shape,
+          "\ntargets:", targets.shape)
     
     model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models", "saved_model")
     model_save_path = create_numbered_folder(model_save_path)
-    # Copy a file to the folder
     shutil.copy2('./utils/params.py', model_save_path)
 
     # Prepare data
     print("Preparing data..")
-    train_loader, val_loader, train_indices, val_indices = prepare_data(distances, cosines, albedo, normals, targets)
+    train_loader, val_loader, train_indices, val_indices = prepare_data(
+        distances, cosines, albedo, normals, azimuths, elevations, targets
+    )
 
     np.save(os.path.join(model_save_path, 'train_indices.npy'), train_indices)
     np.save(os.path.join(model_save_path, 'val_indices.npy'), val_indices)
 
-    # Initialize the model
+    # Initialize model
     print("Initializing model..")
     albedo_channels = albedo.shape[-1]
     model = RelightingModel(albedo_channels=albedo_channels)
 
-    # Train the model
+    # Train model
     print("Training the model..")
-    trained_model = train_model(model, train_loader, val_loader, num_epochs=params.RTI_NET_EPOCHS, model_save_path=model_save_path)
+    trained_model = train_model(model, train_loader, val_loader, 
+                              num_epochs=params.RTI_NET_EPOCHS, 
+                              model_save_path=model_save_path)
 
-    # Save the final model
+    # Save final model
     torch.save(trained_model.state_dict(), os.path.join(model_save_path, 'relighting_model_final.pth'))
-
     print("Training completed and model saved.")
