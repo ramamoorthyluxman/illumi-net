@@ -1,207 +1,395 @@
-# Neural Network for Image Relighting with Multi-Input Processing and Hybrid Architecture
+# IllumiNet: Neural Relighting for Cultural Heritage
 
-## Table of Contents
-1. [Introduction](#introduction)
-2. [Model Architecture](#model-architecture)
-3. [Data Processing](#data-processing)
-4. [Loss Functions](#loss-functions)
-5. [Training Process](#training-process)
-6. [Usage](#usage)
-7. [Dependencies](#dependencies)
-8. [Detailed Network Architecture Explanation](#detailed-network-architecture-explanation)
+## Overview
+IllumiNet is an advanced deep learning framework designed for relighting cultural heritage artifacts using Reflectance Transformation Imaging (RTI) techniques. The project implements a novel neural network architecture that combines photometric stereo principles with modern deep learning approaches to achieve high-quality relighting results.
 
-## Introduction
+## Features
+- Neural relighting of cultural heritage objects
+- Support for both collimated and point-source lighting models
+- Automatic surface normal and albedo estimation
+- Distance and cosine matrix computation for light interaction
+- Patch-based training for efficient processing of high-resolution images
+- Multi-scale feature processing with residual and attention mechanisms
+- Comprehensive loss function incorporating perceptual and physics-based components
+- Hyperparameter optimization capabilities
+- Real-time GPU memory monitoring and utilization tracking
 
-This project implements a deep learning model for image relighting using a combination of convolutional neural networks and attention mechanisms. The model takes as input distance matrices, cosine matrices, surface albedos, and surface normals to produce relit images.
+## Requirements
 
-## Model Architecture
+### Hardware
+- CUDA-capable GPU(s) with at least 8GB VRAM
+- Sufficient RAM for dataset handling (16GB minimum recommended)
+- Storage space for dataset and model checkpoints
 
-The RelightingModel class defines the neural network architecture:
+### Software Dependencies
+```bash
+# Core dependencies
+numpy
+torch
+torchvision
+matplotlib
+opencv-python (cv2)
+scikit-learn
+tqdm
 
-1. **Input Processing**:
-   - Separate convolutional layers for distances, cosines, albedo, and normals.
-   - Distances and cosines use 1-channel input, albedo uses variable channels, and normals use 3 channels.
+# Optional dependencies
+lion-pytorch  # For Lion optimizer
+adabelief-pytorch  # For AdaBelief optimizer
+```
 
-2. **Encoder**:
-   - Four ResidualBlock2D layers with increasing dilation rates (1, 2, 4, 8).
-   - Each block increases the number of channels (128, 256, 512, 1024).
-   - MaxPooling is applied between encoder blocks.
+## Installation
 
-3. **Bridge**:
-   - An AttentionBlock2D to focus on important features.
+1. Clone the repository:
+```bash
+git clone https://github.com/your-username/illumi-net.git
+cd illumi-net
+```
 
-4. **Decoder**:
-   - Three ResidualBlock2D layers.
-   - Features from the encoder are concatenated using skip connections.
-   - Upsampling is done using bilinear interpolation.
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-5. **Output**:
-   - A final convolutional layer to produce the 3-channel output image.
+## Project Structure
 
-### Key Components:
+```
+illumi-net/
+├── main.py                # Main entry point
+├── train.py               # Training implementation
+├── relight.py             # Relighting implementation
+├── utils/
+│   ├── params.py          # Configuration parameters
+│   ├── dataset_class.py   # Dataset handling
+│   └── compute_normals.py # Normal map computation
+├── saved_models/          # Model checkpoints
+└── data/                  # Dataset storage
+```
 
-- **ResidualBlock2D**: Implements residual connections with dilated convolutions.
-- **AttentionBlock2D**: Applies self-attention mechanism to focus on important features.
+## Configuration
 
-## Data Processing
+### Key Parameters in `params.py`
 
-The PatchRelightingDataset class handles data preparation:
+#### Dataset Parameters
+- `ACQ_PATHS`: List of paths to acquisition folders
+- `MAX_NB_IMAGES_PER_ACQ`: Maximum number of images per acquisition
+- `SURFACE_PHYSICAL_SIZE`: Physical dimensions of the surface [width, height]
+- `COLLIMATED_LIGHT`: Toggle between collimated and point-source lighting
 
-1. Converts input data to PyTorch tensors.
-2. Calculates optimal patch sizes based on image dimensions and desired number of patches.
-3. Creates patches from the input data for efficient training.
+#### Training Parameters
+- `RTI_NET_EPOCHS`: Number of training epochs
+- `RTI_NET_PATCH_SIZE`: Size of image patches for training [height, width]
+- `RTI_MAX_NUMBER_PATCHES`: Maximum number of patches per image
+- `BATCH_SIZE`: Training batch size
+- `LEARNING_RATE`: Initial learning rate
+- `OPTIMIZER`: Choice of optimizer ("Adam", "AdamW", "Lion", "RAdam", "AdaBelief", "SGD")
 
-## Loss Functions
-
-The model uses a combination of losses:
-
-1. **MSE Loss**: Mean Squared Error between the output and target images.
-2. **Perceptual Loss**: Uses a pre-trained VGG16 network to compare high-level features.
-3. **Combined Loss**: A weighted sum of MSE and Perceptual losses.
-
-## Training Process
-
-The training process involves:
-
-1. Preparing data loaders for training and validation sets.
-2. Initializing the model, loss functions, and optimizer (Adam).
-3. Training loop:
-   - Forward pass
-   - Loss calculation
-   - Backpropagation
-   - Optimization step
-4. Validation after each epoch.
-5. Learning rate scheduling using ReduceLROnPlateau.
-6. Saving model checkpoints and visualization outputs at regular intervals.
+#### Loss Function Weights
+- `LAMBDA_MSE`: MSE loss weight
+- `LAMBDA_L1`: L1 loss weight
+- `LAMBDA_HIGHLIGHT`: Highlight preservation weight
+- `LAMBDA_GRADIENT`: Gradient consistency weight
+- `LAMBDA_SPECULAR`: Specular reflection weight
+- `LAMBDA_CONTRAST`: Local contrast weight
+- `LAMBDA_PERCEPTUAL`: Perceptual loss weight
 
 ## Usage
 
-To train the model:
+### Training
 
-1. Prepare your input data (distances, cosines, albedo, normals, targets).
-2. Call the `train` function with your data.
-3. The function will handle data preparation, model initialization, and training.
-
+1. Configure your dataset paths (list of acquisition paths) and parameters in `params.py`:
 ```python
-trained_model = train(distances, cosines, albedo, normals, targets)
+ACQ_PATHS = ['/path/to/your/dataset']
+TRAINING = True
 ```
 
-## Dependencies
-
-- PyTorch
-- NumPy
-- Matplotlib
-- scikit-learn
-- torchvision
-
-Make sure to install these dependencies before running the code.
-
-## Visualization
-
-The training process includes:
-
-1. Saving comparison images of original and reconstructed samples.
-2. Plotting training and validation losses.
-
-These visualizations are saved at regular intervals to monitor the training progress.
-
-## Detailed Network Architecture Explanation
-
-The relighting model implemented here is a hybrid architecture that combines elements from several popular network designs. It's primarily based on the U-Net architecture, but incorporates modern improvements like residual connections, dilated convolutions, and attention mechanisms.
-
-### 1. Overall Structure: Modified U-Net
-
-The network follows a U-Net-like encoder-decoder structure:
-
-- It has a contracting path (encoder) that captures context.
-- An expanding path (decoder) that enables precise localization.
-- Skip connections that transfer information across the network.
-
-However, unlike a traditional U-Net:
-- It uses residual blocks instead of plain convolutions.
-- It incorporates dilated convolutions in the encoder.
-- It adds an attention mechanism at the bottleneck.
-
-### 2. Encoder: Dilated Residual Network
-
-The encoder is composed of ResidualBlock2D modules with increasing dilation rates:
-
-```python
-self.encoder1 = ResidualBlock2D(192, 128, dilation=1)
-self.encoder2 = ResidualBlock2D(128, 256, dilation=2)
-self.encoder3 = ResidualBlock2D(256, 512, dilation=4)
-self.encoder4 = ResidualBlock2D(512, 1024, dilation=8)
+2. Run training:
+```bash
+python main.py
 ```
 
-- **Residual Connections**: These allow the network to learn residual functions, making it easier to train deep networks.
-- **Dilated Convolutions**: These increase the receptive field without losing resolution, capturing multi-scale information.
+### Relighting
 
-This design is inspired by networks like DeepLab for semantic segmentation, which use dilated convolutions to capture multi-scale context.
-
-### 3. Bottleneck: Attention Mechanism
-
-At the bottleneck, an AttentionBlock2D is used:
-
+1. Update `params.py` with model path and output settings:
 ```python
-self.bridge = AttentionBlock2D(1024)
+TRAINING = False
+RTI_MODEL_PATH = '/path/to/saved/model.pth'
 ```
 
-This attention mechanism is similar to the Squeeze-and-Excitation (SE) block:
-- It uses global average pooling to capture channel-wise statistics.
-- Two fully connected layers learn channel-wise attention weights.
-- These weights are applied to the input feature map.
-
-This allows the network to focus on the most important features, similar to the attention mechanism in transformers, but applied in a convolutional context.
-
-### 4. Decoder: Upsampling with Skip Connections
-
-The decoder uses a series of upsampling operations and ResidualBlock2D modules:
-
-```python
-self.decoder3 = ResidualBlock2D(1536, 512)
-self.decoder2 = ResidualBlock2D(768, 256)
-self.decoder1 = ResidualBlock2D(384, 128)
+2. Run relighting:
+```bash
+python main.py
 ```
 
-- **Skip Connections**: Features from the encoder are concatenated with the upsampled features, allowing the network to combine low-level and high-level information.
-- **Residual Blocks**: These are used in the decoder as well, maintaining the benefits of residual learning throughout the network.
+## Network Architecture
 
-### 5. Input Processing
+### 1. Input Processing Networks
 
-The network processes multiple input types separately before combining them:
+The network utilizes multiple specialized components for processing different types of input data:
 
-```python
-self.conv_distances = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-self.conv_cosines = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-self.conv_albedo = nn.Conv2d(albedo_channels, 32, kernel_size=3, padding=1)
-self.conv_normals = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+#### 1.1 Distance Feature Network
+```
+Input: [B, 1, H, W] (Distance matrices)
+└── Conv2D(in=1, out=96, k=3, p=1)
+    └── BatchNorm2D(96)
+    └── PReLU
+        ├── SmallScaleConv(in=96, out=48, k=1)
+        └── LargeScaleConv(in=96, out=48, k=5, p=2)
 ```
 
-This allows the network to learn specialized features for each input type before combining them.
-
-### 6. Output Generation
-
-The final output is generated using a 1x1 convolution:
-
-```python
-self.final_conv = nn.Conv2d(128, 3, kernel_size=1)
+#### 1.2 Cosine Feature Network
+```
+Input: [B, 1, H, W] (Cosine matrices)
+└── Conv2D(in=1, out=96, k=3, p=1)
+    └── BatchNorm2D(96)
+    └── PReLU
+        ├── SmallScaleConv(in=96, out=48, k=1)
+        └── LargeScaleConv(in=96, out=48, k=5, p=2)
 ```
 
-This projects the final feature map to the desired 3-channel output.
+#### 1.3 Albedo Processing Network
+```
+Input: [B, 3, H, W] (RGB albedo maps)
+└── Conv2D(in=3, out=48, k=3, p=1)
+    └── BatchNorm2D(48)
+    └── PReLU
+```
 
-### Comparison to Other Architectures
+#### 1.4 Normal Processing Network
+```
+Input: [B, 3, H, W] (Surface normals)
+└── Conv2D(in=3, out=48, k=3, p=1)
+    └── BatchNorm2D(48)
+    └── PReLU
+```
 
-1. **U-Net**: The overall encoder-decoder structure with skip connections is similar to U-Net, but with significant modifications.
+#### 1.5 Angular Feature Network
+```
+Input: [B, 1] (Azimuth angles)
+└── Linear(in=1, out=32)
+    └── ReLU
+    └── Linear(in=32, out=64)
+        └── ReLU
+        └── Linear(in=64, out=64)
+            └── Spatial Expansion to [B, 64, H, W]
+```
 
-2. **ResNet**: The use of residual blocks throughout the network is inspired by ResNet architectures.
+### 2. Feature Integration
 
-3. **DeepLab**: The use of dilated convolutions in the encoder is similar to DeepLab's atrous spatial pyramid pooling.
+The processed features are concatenated along the channel dimension:
+```
+Combined Features = [
+    Distance Small-Scale (48),
+    Distance Large-Scale (48),
+    Cosine Small-Scale (48),
+    Cosine Large-Scale (48),
+    Albedo Features (48),
+    Normal Features (48),
+    Angular Features (64)
+]
+Total Channels: 352
+```
 
-4. **Squeeze-and-Excitation Networks**: The attention mechanism is similar to SE blocks, adding channel-wise attention.
+### 3. Core Network Architecture
 
-5. **Transformers**: While not using self-attention like transformers, the attention block incorporates a form of global context similar to the global attention in vision transformers.
+#### 3.1 Encoder Path
+```
+Input: [B, 352, H, W]
+└── ResBlock1 (352 → 128) + Dropout(0.2)
+    └── MaxPool2D
+    └── ResBlock2 (128 → 256)
+        └── MaxPool2D
+        └── ResBlock3 (256 → 512)
+            └── MaxPool2D
+            └── ResBlock4 (512 → 1024)
+                └── AttentionBridge
+```
 
-In summary, this network is a hybrid architecture that combines the strengths of U-Net (encoder-decoder with skip connections), ResNet (residual learning), dilated
+#### 3.2 Residual Block Structure
+```
+ResidualBlock2D:
+    Input
+    ├── Conv2D → InstanceNorm2D → ReLU
+    │   └── Conv2D → InstanceNorm2D
+    └── Identity/1x1Conv (if channel change)
+    └── Add → ReLU
+```
 
+#### 3.3 Attention Mechanisms
 
-check  https://github.com/juntang-zhuang/Adabelief-Optimizer
+##### Spatial Attention
+```
+Input Feature Maps
+└── Average Pooling Branch
+    └── Max Pooling Branch
+        └── Concatenate
+            └── Conv2D(2→1, k=7, p=3)
+                └── Sigmoid
+                    └── Multiply with Input
+```
+
+##### Channel Attention (SE Block)
+```
+Input Feature Maps
+└── Global Average Pooling
+    └── FC(in→in//16)
+        └── ReLU
+        └── FC(in//16→in)
+            └── Sigmoid
+                └── Scale Features
+```
+
+#### 3.4 Decoder Path
+```
+Bridge Features [B, 1024, H/8, W/8]
+└── Upsample + Concat(Skip3)
+    └── ResBlock3 (1536 → 512)
+        └── Upsample + Concat(Skip2)
+        └── ResBlock2 (768 → 256)
+            └── Upsample + Concat(Skip1)
+            └── ResBlock1 (384 → 128)
+```
+
+### 4. Output Generation
+```
+Features [B, 128, H, W]
+└── Conv2D(128→64) → BatchNorm → PReLU
+    └── Conv2D(64→32) → BatchNorm → PReLU
+        └── Conv2D(32→3)
+            └── Reshape to [B, H, W, 3]
+```
+
+## Implementation Details
+
+### 1. Feature Dimensions Through the Network
+
+```
+Input Stages:
+- Distance/Cosine: [B, 1, H, W] → [B, 96, H, W] → [B, 48*2, H, W]
+- Albedo/Normals: [B, C, H, W] → [B, 48, H, W]
+- Angular: [B, 1] → [B, 64, H, W]
+
+Encoder Stages:
+Level 1: [B, 352, H, W] → [B, 128, H, W]
+Level 2: [B, 128, H/2, W/2] → [B, 256, H/2, W/2]
+Level 3: [B, 256, H/4, W/4] → [B, 512, H/4, W/4]
+Level 4: [B, 512, H/8, W/8] → [B, 1024, H/8, W/8]
+
+Decoder Stages:
+Level 3: [B, 1536, H/4, W/4] → [B, 512, H/4, W/4]
+Level 2: [B, 768, H/2, W/2] → [B, 256, H/2, W/2]
+Level 1: [B, 384, H, W] → [B, 128, H, W]
+
+Output: [B, 3, H, W] → [B, H, W, 3]
+```
+
+### 2. Key Architectural Features
+
+#### Multi-Scale Processing
+- Dual-path processing for distance and cosine features
+- Small-scale (1x1 conv) for local features
+- Large-scale (5x5 conv) for contextual information
+
+#### Skip Connections
+- ResNet-style connections within blocks
+- U-Net-style connections between encoder and decoder
+- Helps maintain fine details and gradient flow
+
+#### Normalization Strategy
+- Instance Normalization in residual blocks for style-invariant features
+- Batch Normalization in main pathway for stable training
+
+#### Attention Integration
+- Spatial attention for focusing on relevant image regions
+- Channel attention for feature recalibration
+- Bridge attention for global context
+
+## Memory Considerations
+
+For an input image of size H×W:
+1. Feature maps at original resolution: O(HW)
+2. Multi-scale features: O(HW/4 + HW/16 + HW/64)
+3. Skip connections: Additional O(HW)
+
+Total memory complexity: O(HW)
+
+## Training Details
+
+### Patch-Based Training
+- Input images are divided into patches of size [64×64]
+- Patches are filtered based on content validity
+- Valid patches must contain:
+  - Sufficient non-black pixels (>50%)
+  - Valid normal information
+  - Valid albedo information
+
+### Gradient Flow
+- PReLU activations prevent dying gradients
+- Residual connections assist gradient propagation
+- Instance normalization helps with feature distribution
+
+### Loss Function Components
+The combined loss function includes:
+- MSE and L1 losses
+- Perceptual loss using VGG features
+- Gradient-domain loss
+- Highlight-aware loss
+- Local contrast loss
+- Range-specific losses for dark, mid, and bright regions
+
+## Data Preparation
+
+1. **Dataset Structure**
+```
+dataset/
+├── acquisition1/
+│   ├── images/
+│   ├── normal_map.npy
+│   ├── albedo.png
+│   ├── distance_matrices.npy
+│   └── angles_matrices.npy
+└── acquisition2/
+    └── ...
+```
+
+2. Required files per acquisition:
+   - `.lp` files containing light positions
+   - Input images
+   - Normal maps and albedo (computed or provided)
+   - Distance and angle matrices
+
+## Visualization Tools
+
+The project includes tools for:
+- Distance and cosine matrix heatmaps
+- Training progress monitoring
+- Comparison visualizations
+- GPU memory usage tracking
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a new Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Citation
+
+If you use this work in your research, please cite:
+
+```bibtex
+@article{illuminet2024,
+  title={IllumiNet: Neural Relighting for Cultural Heritage Preservation},
+  author={[Authors]},
+  journal={[Journal]},
+  year={2024}
+}
+```
+
+## Contact
+
+For questions or support, please open an issue in the GitHub repository or contact the maintainers at l.ramamoorthy01gmail.com.

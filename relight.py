@@ -21,19 +21,20 @@ def load_model(model_path, albedo_channels):
     model.eval()
     return model, device
 
-def relight_images(model, distances, cosines, albedo, normals, device):
+def relight_images(model, distances, cosines, albedo, normals, azimuths, device):
     with torch.no_grad():
         # Move inputs to device
         distances = distances.to(device)
         cosines = cosines.to(device)
         albedo = albedo.to(device)
         normals = normals.to(device)
+        azimuths = azimuths.to(device)
         
         outputs = []
         # Process each light direction
         for i in range(distances.shape[1]):
             # Process batch through model
-            output, _ = model(distances[:, i], cosines[:, i], albedo, normals)
+            output, _ = model(distances[:, i], cosines[:, i], albedo, normals, azimuths[:, i])
             
             # Move to CPU and convert to numpy
             output = output.cpu().numpy()
@@ -58,8 +59,9 @@ def save_images(images, output_dir, acq_idx):
         # Convert to BGR for OpenCV
         image_bgr = (image[..., ::-1] * 255).astype(np.uint8)
         cv2.imwrite(os.path.join(acq_dir, f'relit_image_{i}.png'), image_bgr)
+        print("Saved image at", os.path.join(acq_dir, f'relit_image_{i}.png') )
 
-def relight(model_path, distances, cosines, albedo, normals, output_dir):
+def relight(model_path, distances, cosines, albedo, normals, azimuths, output_dir):
     albedo_channels = albedo.shape[-1]
     model, device = load_model(model_path, albedo_channels)
     
@@ -70,6 +72,7 @@ def relight(model_path, distances, cosines, albedo, normals, output_dir):
     cosines = torch.from_numpy(cosines).float()
     albedo = torch.from_numpy(albedo).float()
     normals = torch.from_numpy(normals).float()
+    azimuths = torch.from_numpy(azimuths).float()
 
     # Process one acquisition at a time
     for acq in tqdm(range(distances.shape[0])):
@@ -82,6 +85,7 @@ def relight(model_path, distances, cosines, albedo, normals, output_dir):
                 cosines[acq:acq+1],
                 albedo[acq:acq+1],
                 normals[acq:acq+1],
+                azimuths[acq:acq+1],
                 device
             )
             

@@ -34,6 +34,7 @@ def main():
     print("Cosine matrices shape: ", data_.cosine_matrices.shape)
     print("Surface albedos shape: ", data_.surface_albedos.shape)
     print("Surface normals shape: ", data_.surface_normals.shape)
+    print("Azimuths shape: ", data_.azimuths.shape)
     if params.TRAINING:
         print("Images shape: ", data_.images.shape)
     
@@ -50,7 +51,8 @@ def main():
                        cosines=data_.cosine_matrices,
                        albedo=data_.surface_albedos,
                        normals=data_.surface_normals,
-                       output_dir='/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG/reconstructed/')
+                       azimuths = data_.azimuths,
+                       output_dir='/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/reconstructed/')
 
 if __name__ == "__main__":
     main()

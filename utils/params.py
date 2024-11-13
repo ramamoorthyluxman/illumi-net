@@ -41,7 +41,7 @@ RTI_NET_PATCH_SIZE = [64,64] #[height, width]. Must be divisible by 32  or [192,
 RTI_MAX_NUMBER_PATCHES = 128 # Randomly choose desired number of patches from the image. 
 
 # RTI Relighting
-RTI_MODEL_PATH = r'/work/imvia/ra7916lu/illumi-net/saved_models/saved_models_05_20241107_101119/relighting_model_epoch_70.pth'
+RTI_MODEL_PATH = r'/work/imvia/ra7916lu/illumi-net/saved_models/saved_models_15_20241113_122948/relighting_model_epoch_126.pth'
 
 # Goal
 TRAINING = True # Training: True, Relighting: False. If you choose relighting- ensure the path contains - 1. distances.npy, 2. cosines.npy, 3. albedo and 4. normals
@@ -52,22 +52,23 @@ BATCH_SIZE = 16
 TRAIN_SHUFFLE = True
 VAL_SHUFFLE = False
 NUM_WORKERS = 4
-BATCH_SIZE = 16
+
+BATCH_SIZE = 32
 TRAIN_SHUFFLE = True
 VAL_SHUFFLE = False
 NUM_WORKERS = 4
-LEARNING_RATE = 0.001
-LAMBDA_MSE = 1.697571586526807
-LAMBDA_L1 = 0.8
-LAMBDA_HIGHLIGHT = 0.0
-LAMBDA_GRADIENT = 0.0
-LAMBDA_SPECULAR = 1.0045861973846846
-LAMBDA_CONTRAST = 0.480192360982806
-LAMBDA_PERCEPTUAL = 0.744375850604896994
-LAMBDA_DARK = 1.0       # Weight for dark region accuracy
-LAMBDA_MID = 0.0         # Weight for mid-tone accuracy
-LAMBDA_BRIGHT =  0.0      # Weight for highlight accuracy
-LAMBDA_LARGE_DEV = 0.0   # Weight for large deviation penalty
+LEARNING_RATE = 0.0008
+LAMBDA_MSE = 1.5
+LAMBDA_L1 = 1.0
+LAMBDA_HIGHLIGHT = 1.0
+LAMBDA_GRADIENT = 0.5
+LAMBDA_SPECULAR = 0.7
+LAMBDA_CONTRAST = 0.5
+LAMBDA_PERCEPTUAL = 0.5
+LAMBDA_DARK = 0.1       # Weight for dark region accuracy
+LAMBDA_MID = 0.1         # Weight for mid-tone accuracy
+LAMBDA_BRIGHT =  0.8      # Weight for highlight accuracy
+LAMBDA_LARGE_DEV = 0.1   # Weight for large deviation penalty
 
 PERSISTENT_WORKER =True,
 PIN_MEMORY =True,

@@ -70,7 +70,8 @@ class dataset:
         # If training you pick randomly the desired number of samples. For relight, you consider whatever distances and cosines you pass. 
         if params.TRAINING:
             for i in range(len(self.acqs)):
-                self.rand_indices.append(random.sample(range(len(self.lps_cartesian[i])), min(len(self.lps_cartesian[i]), params.MAX_NB_IMAGES_PER_ACQ)))
+                # self.rand_indices.append(random.sample(range(len(self.lps_cartesian[i])), min(len(self.lps_cartesian[i]), params.MAX_NB_IMAGES_PER_ACQ)))
+                self.rand_indices.append(list(range(0, len(self.lps_cartesian[i]))))
 
         if params.COMPUTE_NORMALS_AND_ALBEDO and params.TRAINING:
             self.computed_normals_and_albedos()
@@ -141,7 +142,7 @@ class dataset:
             self.lps_cartesian.append(lps_cartesian)
             self.lps_spherical.append(lps_spherical) 
             self.image_paths.append(img_paths) 
-        self.azimuths = np.array(self.azimuths)
+            np.save(os.path.join(os.path.dirname(self.image_paths[0][0]), "azimuths.npy"), azimuths)
 
 
     def computed_normals_and_albedos(self):
@@ -220,7 +221,8 @@ class dataset:
             acq_distance_matrices = np.load(os.path.join(self.acqs[i], "distance_matrices.npy"))
             if len(self.rand_indices)==0:
                 for i in range(len(self.acqs)):
-                    self.rand_indices.append(random.sample(range(acq_distance_matrices.shape[0]), min(acq_distance_matrices.shape[0], params.MAX_NB_IMAGES_PER_ACQ)))
+                    # self.rand_indices.append(random.sample(range(acq_distance_matrices.shape[0]), min(acq_distance_matrices.shape[0], params.MAX_NB_IMAGES_PER_ACQ)))
+                    self.rand_indices.append(list(range(0, len(self.lps_cartesian[i]))))
             self.distance_matrices.append(acq_distance_matrices[self.rand_indices[i]])
         self.distance_matrices = np.array(self.distance_matrices)
             
@@ -228,8 +230,11 @@ class dataset:
         for i in tqdm(range(len(self.acqs)), desc="Loading acquisitions", unit="acq"):
 
             acq_cosine_matrices = np.load(os.path.join(self.acqs[i], "angles_matrices.npy"))
+            azimuths = np.load(os.path.join(self.acqs[i], "azimuths.npy"))
+            self.azimuths.append(azimuths[self.rand_indices[i]])
             self.cosine_matrices.append(acq_cosine_matrices[self.rand_indices[i]])
         self.cosine_matrices = np.array(self.cosine_matrices)
+        self.azimuths = np.array(self.azimuths)
 
     def create_and_save_heatmaps(self):
         print("Creating and saving heatmaps with corresponding images and light positions...")
