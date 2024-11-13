@@ -1,5 +1,3 @@
-# hyperparameter_optimizer.py
-
 import os
 import numpy as np
 import torch
@@ -85,9 +83,10 @@ class HyperparameterOptimizer:
                 cosines = batch['cosines'].to(device)
                 albedo = batch['albedo'].to(device)
                 normals = batch['normals'].to(device)
+                azimuth = batch['azimuth'].to(device)
                 targets = batch['target'].to(device)
 
-                outputs, _ = model(distances, cosines, albedo, normals)
+                outputs, _ = model(distances, cosines, albedo, normals, azimuth)
                 
                 # Compute MSE for this batch
                 mse = torch.nn.functional.mse_loss(outputs, targets)
@@ -109,20 +108,31 @@ class HyperparameterOptimizer:
             # Load dataset
             print("Loading dataset...")
             data_ = dataset(params.ACQ_PATHS)
-            
+
+            print("distances shape: ", data_.distance_matrices.shape)
+            print("cosine shape: ", data_.cosine_matrices.shape)
+            print("surface albedos shape: ", data_.surface_albedos.shape)
+            print("surface_normals shape: ", data_.surface_normals.shape)
+            print("azimuths shape: ", data_.azimuths.shape)
+            print("images shape: ", data_.images.shape)
+
             # Create data loaders
             train_loader, val_loader, _, _ = train.prepare_data(
                 distances=data_.distance_matrices,
                 cosines=data_.cosine_matrices,
                 albedo=data_.surface_albedos,
                 normals=data_.surface_normals,
+                azimuths=data_.azimuths,  
                 targets=data_.images
-            )
+            ) 
+
             
             # Initialize model
             print("Initializing model...")
             model = train.RelightingModel(albedo_channels=data_.surface_albedos.shape[-1])
             
+            
+
             # Train model
             print("Training model...")
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -131,7 +141,7 @@ class HyperparameterOptimizer:
             # Reduce epochs for optimization
             original_epochs = params.RTI_NET_EPOCHS
             params.RTI_NET_EPOCHS = 20  # Use fewer epochs during optimization
-            
+
             # Train model
             model = train.train_model(model, train_loader, val_loader, num_epochs=params.RTI_NET_EPOCHS)
             
@@ -166,7 +176,6 @@ class HyperparameterOptimizer:
         os.makedirs(viz_path, exist_ok=True)
         
         # 1. MSE Evolution Plot
-        print("Creating MSE evolution plot...")
         plt.figure(figsize=(10, 6))
         iterations = range(1, len(self.mse_history) + 1)
         plt.plot(iterations, self.mse_history, 'bo-')
@@ -183,7 +192,6 @@ class HyperparameterOptimizer:
             history_df['mse'] = self.mse_history
             
             # 2. Parameter Correlation Heatmap
-            print("Creating correlation heatmap...")
             plt.figure(figsize=(12, 10))
             correlation = history_df.corr()
             sns.heatmap(correlation, annot=True, cmap='coolwarm', fmt='.2f')
@@ -193,9 +201,7 @@ class HyperparameterOptimizer:
             plt.close()
             
             # 3. Parameter Importance Plot
-            print("Creating parameter importance plot...")
             plt.figure(figsize=(12, 6))
-            # importance = abs(correlation['mse']).sort_values(ascending=False)[1:]
             importance = correlation['mse']
             importance.plot(kind='bar')
             plt.title('Parameter Importance (Based on Correlation with MSE)')
@@ -220,7 +226,7 @@ class HyperparameterOptimizer:
         
         print(f"Saved results to {save_path}")
 
-    def optimize(self, n_trials=200):
+    def optimize(self, n_trials=100):
         """Run the optimization process"""
         print(f"Starting optimization with {n_trials} trials...")
         
@@ -230,7 +236,7 @@ class HyperparameterOptimizer:
             model_type='GP',
             acquisition_type='EI',
             maximize=False,
-            initial_design_numdata=80
+            initial_design_numdata=45
         )
         
         optimizer.run_optimization(max_iter=n_trials)

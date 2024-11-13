@@ -49,6 +49,8 @@ class dataset:
         self.lp_files = []
         self.lps_cartesian = []
         self.lps_spherical = []
+        self.azimuths = []
+        self.elevations = []
         self.image_paths = []
         self.surface_normals = []
         self.surface_albedos = []
@@ -116,6 +118,8 @@ class dataset:
                 lps_cartesian = []
                 lps_spherical = []
                 img_paths = []
+                azimuths = []
+                elevations = []
                 for line in lines[1:]:
                     parts = line.split()
                     if len(parts) != 4:
@@ -128,10 +132,16 @@ class dataset:
                     z = float(z)
                     lps_cartesian.append((x, y, z))
                     lps_spherical.append(Cartesian2spherical3D(x, y, z))
+                    _, azimuth, elevation = Cartesian2spherical3D(x, y, z)
+                    azimuths.append(azimuth)
+                    elevations.append(elevation)
                     img_paths.append(os.path.join(os.path.dirname(lp_file), img_file))
+            self.azimuths.append(azimuths)
+            self.elevations.append(elevations)
             self.lps_cartesian.append(lps_cartesian)
             self.lps_spherical.append(lps_spherical) 
-            self.image_paths.append(img_paths)                      
+            self.image_paths.append(img_paths) 
+        self.azimuths = np.array(self.azimuths)
 
 
     def computed_normals_and_albedos(self):

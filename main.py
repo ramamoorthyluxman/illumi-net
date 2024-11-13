@@ -42,6 +42,7 @@ def main():
                    cosines=data_.cosine_matrices,
                    albedo=data_.surface_albedos,
                    normals=data_.surface_normals,
+                   azimuths = data_.azimuths,
                    targets=data_.images)
     else:
         relight.relight(model_path=params.RTI_MODEL_PATH,

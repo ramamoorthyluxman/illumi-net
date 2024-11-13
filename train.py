@@ -1,5 +1,3 @@
-# Train.py
-
 # System and basic imports
 import os
 import sys
@@ -31,193 +29,18 @@ import torchvision.transforms as transforms
 from utils import params
 
 # Set visible GPUs
-os.environ["CUDA_VISIBLE_DEVICES"] = params.CUDA_VISIBLE_DEVICES  # Modify this according to your needs
-
-class MultiHeadAttentionBlock(nn.Module):
-    def __init__(self, channels):
-        super(MultiHeadAttentionBlock, self).__init__()
-        self.channels = channels
-        self.num_heads = 8
-        self.head_dim = channels // 8
-        assert channels % self.num_heads == 0, f"Channels {channels} must be divisible by num_heads {self.num_heads}"
-        
-        # Linear projections
-        self.q_proj = nn.Conv2d(channels, channels, 1)
-        self.k_proj = nn.Conv2d(channels, channels, 1)
-        self.v_proj = nn.Conv2d(channels, channels, 1)
-        self.out_proj = nn.Conv2d(channels, channels, 1)
-        
-        # Normalization and activation
-        self.norm1 = nn.BatchNorm2d(channels)
-        self.norm2 = nn.BatchNorm2d(channels)
-        self.mlp = nn.Sequential(
-            nn.Conv2d(channels, channels * 4, 1),
-            nn.ReLU(),
-            nn.Conv2d(channels * 4, channels, 1)
-        )
-        
-    def forward(self, x):
-        b, c, h, w = x.shape
-        
-        # First normalization
-        residual = x
-        x = self.norm1(x)
-        
-        # Reshape for attention
-        q = self.q_proj(x).view(b, self.num_heads, self.head_dim, h * w)
-        k = self.k_proj(x).view(b, self.num_heads, self.head_dim, h * w)
-        v = self.v_proj(x).view(b, self.num_heads, self.head_dim, h * w)
-        
-        # Transpose for matrix multiplication
-        q = q.transpose(-2, -1)  # B, num_heads, H*W, head_dim
-        k = k.transpose(-2, -1)  # B, num_heads, H*W, head_dim
-        v = v.transpose(-2, -1)  # B, num_heads, H*W, head_dim
-        
-        # Attention
-        attn = (q @ k.transpose(-2, -1)) * (self.head_dim ** -0.5)  # B, num_heads, H*W, H*W
-        attn = torch.softmax(attn, dim=-1)
-        
-        # Apply attention to values
-        out = (attn @ v)  # B, num_heads, H*W, head_dim
-        
-        # Reshape back
-        out = out.transpose(-2, -1).contiguous()  # B, num_heads, head_dim, H*W
-        out = out.view(b, c, h, w)
-        
-        # Output projection
-        out = self.out_proj(out)
-        x = residual + out
-        
-        # MLP block
-        residual = x
-        x = self.norm2(x)
-        x = self.mlp(x)
-        x = residual + x
-        
-        return x
-    
-class RefinementBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(RefinementBlock, self).__init__()
-        
-        # Initial refinement convolutions
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        
-        # Channel attention
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc1 = nn.Conv2d(out_channels, out_channels // 16, kernel_size=1)
-        self.fc2 = nn.Conv2d(out_channels // 16, out_channels, kernel_size=1)
-        
-        # Spatial refinement
-        self.conv_spatial = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn_spatial = nn.BatchNorm2d(out_channels)
-        
-        # Activation functions
-        self.relu = nn.ReLU(inplace=True)
-        self.sigmoid = nn.Sigmoid()
-        
-        # Skip connection for residual learning
-        self.downsample = None
-        if in_channels != out_channels:
-            self.downsample = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
-
-    def forward(self, x):
-        identity = x
-        
-        # Initial refinement
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
-        
-        # Channel attention
-        ca = self.avg_pool(out)
-        ca = self.fc1(ca)
-        ca = self.relu(ca)
-        ca = self.fc2(ca)
-        ca = self.sigmoid(ca)
-        
-        # Apply channel attention
-        out = out * ca
-        
-        # Spatial refinement
-        out = self.conv_spatial(out)
-        out = self.bn_spatial(out)
-        
-        # Handle skip connection
-        if self.downsample is not None:
-            identity = self.downsample(identity)
-            
-        # Add skip connection
-        out += identity
-        out = self.relu(out)
-        
-        return out
-
-class SobelFilter(nn.Module):
-    def __init__(self):
-        super(SobelFilter, self).__init__()
-        
-        # Define Sobel kernels
-        self.sobel_x = torch.tensor([
-            [-1, 0, 1],
-            [-2, 0, 2],
-            [-1, 0, 1]
-        ], dtype=torch.float32).reshape(1, 1, 3, 3)
-        
-        self.sobel_y = torch.tensor([
-            [-1, -2, -1],
-            [0, 0, 0],
-            [1, 2, 1]
-        ], dtype=torch.float32).reshape(1, 1, 3, 3)
-        
-    def forward(self, x):
-        # Move kernels to the same device as input
-        self.sobel_x = self.sobel_x.to(x.device)
-        self.sobel_y = self.sobel_y.to(x.device)
-        
-        # Handle RGB images by processing each channel
-        b, c, h, w = x.shape
-        edges = torch.zeros_like(x)
-        
-        # Process each channel separately
-        for i in range(c):
-            channel = x[:, i:i+1, :, :]
-            
-            # Apply Sobel filters
-            grad_x = F.conv2d(channel, self.sobel_x, padding=1)
-            grad_y = F.conv2d(channel, self.sobel_y, padding=1)
-            
-            # Calculate gradient magnitude
-            grad_mag = torch.sqrt(grad_x**2 + grad_y**2)
-            
-            edges[:, i:i+1, :, :] = grad_mag
-            
-        return edges
+os.environ["CUDA_VISIBLE_DEVICES"] = params.CUDA_VISIBLE_DEVICES
 
 def get_gpu_memory_stats():
-    """
-    Get the GPU memory usage stats using nvidia-smi
-    Returns a string with memory usage info for each GPU
-    """
+    """Get GPU memory usage stats"""
     if not torch.cuda.is_available():
         return "GPU not available"
     
     try:
         gpu_stats = []
         for i in range(torch.cuda.device_count()):
-            # Get memory usage in MB
             allocated = torch.cuda.memory_allocated(i) / 1024**2
             cached = torch.cuda.memory_reserved(i) / 1024**2
-            
-            # Get device properties
             prop = torch.cuda.get_device_properties(i)
             total_memory = prop.total_memory / 1024**2
             
@@ -231,10 +54,7 @@ def get_gpu_memory_stats():
     return "\n".join(gpu_stats)
 
 def get_gpu_utilization():
-    """
-    Get GPU utilization using nvidia-smi
-    Returns utilization percentage for each GPU
-    """
+    """Get GPU utilization percentage"""
     try:
         result = subprocess.check_output(
             ['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
@@ -246,9 +66,7 @@ def get_gpu_utilization():
         return ["Could not get GPU utilization"]
 
 def print_gpu_stats(epoch, batch_idx, num_batches):
-    """
-    Print comprehensive GPU statistics
-    """
+    """Print GPU statistics"""
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print("\n" + "="*80)
     print(f"GPU Stats at {current_time} (Epoch {epoch+1}, Batch {batch_idx}/{num_batches})")
@@ -259,182 +77,15 @@ def print_gpu_stats(epoch, batch_idx, num_batches):
     print("\n".join(get_gpu_utilization()))
     print("="*80 + "\n")
 
-
-class CombinedLoss(nn.Module):
-    def __init__(self, use_perceptual=True, input_channels=3):
-        super(CombinedLoss, self).__init__()
-        self.use_perceptual = use_perceptual
-        self.input_channels = input_channels
-        self.hist_bins = 64
-        
-        # Basic losses
-        self.mse_loss = nn.MSELoss()
-        self.l1_loss = nn.L1Loss()
-        
-        # Initialize VGG for perceptual loss if needed
-        if self.use_perceptual:
-            vgg = models.vgg16(pretrained=True)
-            
-            # If input channels != 3, modify the first conv layer
-            if input_channels != 3:
-                self.channel_adapt = nn.Conv2d(input_channels, 3, kernel_size=1)
-            else:
-                self.channel_adapt = nn.Identity()
-            
-            # Only use the first few layers of VGG to avoid channel mismatch
-            self.vgg_features = nn.Sequential(
-                *list(vgg.features)[:4]  # Only use up to relu1_2
-            ).eval()
-            
-            # Freeze VGG parameters
-            for param in self.vgg_features.parameters():
-                param.requires_grad = False
-            
-        # Pooling layers for reuse
-        self.avg_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
-        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
-        
-        # Sobel filters for gradient computation
-        self.register_buffer('sobel_x', torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], 
-                                                    dtype=torch.float32).view(1, 1, 3, 3))
-        self.register_buffer('sobel_y', torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], 
-                                                    dtype=torch.float32).view(1, 1, 3, 3))
-    
-    def normalize_vgg(self, x):
-        """Normalize input to VGG expected range"""
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(x.device)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(x.device)
-        return (x - mean) / std
-    
-    def compute_gradient_sobel(self, x):
-        """Compute gradients using Sobel filters"""
-        gradients = []
-        for c in range(x.shape[1]):
-            gx = F.conv2d(x[:, c:c+1], self.sobel_x, padding=1)
-            gy = F.conv2d(x[:, c:c+1], self.sobel_y, padding=1)
-            gradients.append(torch.sqrt(gx**2 + gy**2))
-        return torch.cat(gradients, dim=1)
-    
-    def compute_perceptual_loss(self, output, target):
-        """Compute perceptual loss using VGG features"""
-        if not self.use_perceptual:
-            return torch.tensor(0.0).to(output.device)
-            
-        # Adapt channels if needed
-        output = self.channel_adapt(output)
-        target = self.channel_adapt(target)
-        
-        # Ensure values are in [0, 1]
-        output = output.clamp(0, 1)
-        target = target.clamp(0, 1)
-        
-        # Normalize for VGG
-        output = self.normalize_vgg(output)
-        target = self.normalize_vgg(target)
-        
-        # Extract features and compute loss
-        output_features = self.vgg_features(output)
-        target_features = self.vgg_features(target)
-        
-        # Use normalized MSE loss for features
-        return F.mse_loss(output_features, target_features)
-    
-    def compute_range_losses(self, output, target):
-        """
-        Compute separate losses for different intensity ranges to ensure accurate 
-        pixel-level prediction across the full dynamic range
-        """
-        losses = {}
-        
-        # Dark regions (shadows) - more sensitive to small differences
-        dark_mask = (target <= 0.2).float()
-        losses['dark'] = torch.mean((output * dark_mask - target * dark_mask) ** 2)
-        
-        # Mid-tones
-        mid_mask = ((target > 0.2) & (target < 0.8)).float()
-        losses['mid'] = torch.mean((output * mid_mask - target * mid_mask) ** 2)
-        
-        # Bright regions (highlights) - prevent clipping
-        bright_mask = (target >= 0.8).float()
-        losses['bright'] = 2.0 * torch.mean((output * bright_mask - target * bright_mask) ** 2)
-        
-        # Penalize any extreme deviations more heavily
-        large_diff_mask = (torch.abs(output - target) > 0.1).float()
-        losses['large_dev'] = 2.0 * torch.mean((output * large_diff_mask - target * large_diff_mask) ** 2)
-        
-        return losses
-
-    
-    def forward(self, output, target):
-        # Ensure input format
-        if output.dim() == 4 and output.shape[-1] == self.input_channels:
-            output = output.permute(0, 3, 1, 2)
-            target = target.permute(0, 3, 1, 2)
-        
-        losses = {}
-        
-        # 1. Basic MSE and L1 loss
-        losses['mse'] = self.mse_loss(output, target)
-        losses['l1'] = self.l1_loss(output, target)
-        
-        # 2. Highlight-aware loss
-        bright_mask = (target > 0.7).float()
-        losses['highlight'] = F.mse_loss(output * bright_mask, target * bright_mask)
-        
-        # 3. Gradient loss (using Sobel)
-        output_grad = self.compute_gradient_sobel(output)
-        target_grad = self.compute_gradient_sobel(target)
-        losses['gradient'] = F.mse_loss(output_grad, target_grad)
-        
-        # 4. Local contrast loss
-        output_mean = self.avg_pool(output)
-        target_mean = self.avg_pool(target)
-        output_contrast = output - output_mean
-        target_contrast = target - target_mean
-        losses['contrast'] = F.mse_loss(output_contrast, target_contrast)
-        
-        # 5. Specular highlight loss
-        max_pooled = self.max_pool(target)
-        specular_mask = (target > 0.8 * max_pooled).float()
-        losses['specular'] = F.mse_loss(output * specular_mask, target * specular_mask)
-        
-        # 6. Perceptual loss (if enabled)
-        if self.use_perceptual:
-            losses['perceptual'] = self.compute_perceptual_loss(output, target)
-
-        # New range-specific losses
-        range_losses = self.compute_range_losses(output, target)
-        losses.update(range_losses)
-
-        # Compute total loss with weights
-        total_loss = (
-            params.LAMBDA_MSE * losses['mse'] +
-            params.LAMBDA_L1 * losses['l1'] +
-            params.LAMBDA_HIGHLIGHT * losses['highlight'] +
-            params.LAMBDA_GRADIENT * losses['gradient'] +
-            params.LAMBDA_CONTRAST * losses['contrast'] +
-            params.LAMBDA_SPECULAR * losses['specular'] +
-            params.LAMBDA_DARK * losses['dark'] +          # Add these to params.py
-            params.LAMBDA_MID * losses['mid'] +           # Suggested values:
-            params.LAMBDA_BRIGHT * losses['bright'] +     # LAMBDA_DARK = 1.0
-            params.LAMBDA_LARGE_DEV * losses['large_dev'] # LAMBDA_MID = 1.0
-        )
-        
-        if self.use_perceptual:
-            total_loss += params.LAMBDA_PERCEPTUAL * losses['perceptual']
-        
-        return total_loss, losses
-    
 class PatchRelightingDataset(Dataset):
-    def __init__(self, distances, cosines, albedo, normals, azimuths, elevations, targets):
-        # Convert inputs to numpy arrays if they aren't already
+    def __init__(self, distances, cosines, albedo, normals, azimuths, targets):
+        # Convert inputs to numpy arrays
         distances = np.array(distances)
         cosines = np.array(cosines)
         albedo = np.array(albedo)
         normals = np.array(normals)
         targets = np.array(targets)
         azimuths = np.array(azimuths)  # Shape: [K, N]
-        elevations = np.array(elevations)  # Shape: [K, N]
         
         # Validate input shapes
         K, N, H, W = distances.shape
@@ -443,7 +94,6 @@ class PatchRelightingDataset(Dataset):
         assert normals.shape == (K, H, W, 3), f"Normals shape {normals.shape} doesn't match expected shape {(K, H, W, 3)}"
         assert targets.shape == (K, N, H, W, 3), f"Targets shape {targets.shape} doesn't match expected shape {(K, N, H, W, 3)}"
         assert azimuths.shape == (K, N), f"Azimuths shape {azimuths.shape} doesn't match expected shape {(K, N)}"
-        assert elevations.shape == (K, N), f"Elevations shape {elevations.shape} doesn't match expected shape {(K, N)}"
         
         # Convert to torch tensors
         self.distances = torch.FloatTensor(distances)
@@ -452,7 +102,6 @@ class PatchRelightingDataset(Dataset):
         self.normals = torch.FloatTensor(normals)
         self.targets = torch.FloatTensor(targets)
         self.azimuths = torch.FloatTensor(azimuths)
-        self.elevations = torch.FloatTensor(elevations)
         
         # Calculate patch size and number of patches
         self.patch_size, self.patches_per_image = self.calculate_patches() 
@@ -462,13 +111,14 @@ class PatchRelightingDataset(Dataset):
         self.patches = self._create_valid_patches()  
         print(f"Created {len(self.patches)} valid patches after filtering")
 
+    # Continuation of PatchRelightingDataset
     def calculate_patches(self):
-        # Same as before
         print("Calculating the patches")
         patch_height, patch_width = params.RTI_NET_PATCH_SIZE
         desired_patches = params.RTI_MAX_NUMBER_PATCHES
         _, _, image_height, image_width = self.distances.shape
         
+        # Ensure patch sizes are not larger than image dimensions and are divisible by 32
         patch_height = min(patch_height, image_height)
         patch_width = min(patch_width, image_width)
         patch_height = (patch_height // 32) * 32
@@ -486,7 +136,6 @@ class PatchRelightingDataset(Dataset):
         return [patch_height, patch_width], adjusted_patches
 
     def is_valid_patch(self, k, n, i, j):
-        # Same validation logic as before
         patch_slice = slice(i, i + self.patch_size[0]), slice(j, j + self.patch_size[1])
         
         target_patch = self.targets[k, n][patch_slice]
@@ -509,7 +158,6 @@ class PatchRelightingDataset(Dataset):
                 has_valid_albedo)
 
     def _create_valid_patches(self):
-        # Same as before
         patches = []
         attempted_patches = 0
         max_attempts = self.patches_per_image * 3
@@ -574,17 +222,17 @@ class PatchRelightingDataset(Dataset):
                 'cosines': self.cosines[k, n][patch_slice],
                 'albedo': self.albedo[k][patch_slice],
                 'normals': self.normals[k][patch_slice],
-                'azimuth': self.azimuths[k, n],  # Single value for the whole patch
-                'elevation': self.elevations[k, n],  # Single value for the whole patch
+                'azimuth': self.azimuths[k, n],
                 'target': self.targets[k, n][patch_slice]
             }
             
-            # Validation
+            # Additional validation
             if torch.isnan(item['target']).any():
                 raise ValueError("NaN values found in target patch")
             if torch.all(item['target'] == 0):
                 raise ValueError("Completely black patch found")
             
+            # Validate output shapes
             pH, pW = self.patch_size
             assert item['distances'].shape == (pH, pW), f"Invalid distances shape: {item['distances'].shape}"
             assert item['cosines'].shape == (pH, pW), f"Invalid cosines shape: {item['cosines'].shape}"
@@ -592,7 +240,6 @@ class PatchRelightingDataset(Dataset):
             assert item['normals'].shape == (pH, pW, 3), f"Invalid normals shape: {item['normals'].shape}"
             assert item['target'].shape == (pH, pW, 3), f"Invalid target shape: {item['target'].shape}"
             assert isinstance(item['azimuth'].item(), float), "Invalid azimuth type"
-            assert isinstance(item['elevation'].item(), float), "Invalid elevation type"
             
             return item
             
@@ -600,8 +247,8 @@ class PatchRelightingDataset(Dataset):
             print(f"Error getting item {idx}: {e}")
             print(f"Patch info - k: {k}, n: {n}, i: {i}, j: {j}")
             raise e
-        
 
+# Network Building Blocks
 class ResidualBlock2D(nn.Module):
     def __init__(self, in_channels, out_channels, dilation=1):
         super(ResidualBlock2D, self).__init__()
@@ -642,34 +289,6 @@ class AttentionBlock2D(nn.Module):
         fc2 = self.fc2(torch.relu(fc1))
         attention = self.sigmoid(fc2).view(x.size(0), x.size(1), 1, 1)
         return x * attention
-    
-class DenseResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(DenseResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels//2, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(in_channels + out_channels//2, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels//2)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.prelu = nn.PReLU()
-        
-    def forward(self, x):
-        out1 = self.prelu(self.bn1(self.conv1(x)))
-        out2 = self.prelu(self.bn2(self.conv2(torch.cat([x, out1], dim=1))))
-        return out2
-
-class DetailEnhancementBranch(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(DetailEnhancementBranch, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(32, out_channels, kernel_size=3, padding=1)
-        self.attention = SpatialAttention()
-        
-    def forward(self, x):
-        detail = self.conv1(x)
-        detail = self.conv2(detail)
-        detail = self.attention(detail)
-        return self.conv3(detail)
 
 class SpatialAttention(nn.Module):
     def __init__(self):
@@ -682,7 +301,7 @@ class SpatialAttention(nn.Module):
         attention = torch.cat([avg_pool, max_pool], dim=1)
         attention = torch.sigmoid(self.conv(attention))
         return x * attention
-
+    
 class RelightingModel(nn.Module):
     def __init__(self, albedo_channels):
         super(RelightingModel, self).__init__()
@@ -695,7 +314,7 @@ class RelightingModel(nn.Module):
         
         # Angle Processing Network
         self.angle_encoder = nn.Sequential(
-            nn.Linear(2, 32),
+            nn.Linear(1, 32),      # Single angle input
             nn.ReLU(),
             nn.Linear(32, 64),
             nn.ReLU(),
@@ -750,24 +369,25 @@ class RelightingModel(nn.Module):
         # Pooling and upsampling
         self.pool = nn.MaxPool2d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-
-        self.dropout = nn.Dropout(0.2)  # Add dropout
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.2)
 
     def ensure_size_match(self, x, target):
         if x.shape[2:] != target.shape[2:]:
             x = nn.functional.interpolate(x, size=target.shape[2:], mode='bilinear', align_corners=True)
         return x
 
-    def forward(self, distances, cosines, albedo, normals, azimuth, elevation):
+    def forward(self, distances, cosines, albedo, normals, azimuth):
         # Store original size
         original_size = (distances.shape[1], distances.shape[2])
         
         # Process angular features
-        angles = torch.stack([azimuth, elevation], dim=1)  # Shape: [B, 2]
-        angle_features = self.angle_encoder(angles)  # Shape: [B, 64]
+        azimuth = azimuth.unsqueeze(1)  # Add feature dimension [B, 1]
+        angle_features = self.angle_encoder(azimuth)  # Shape: [B, 64]
         
         # Expand angle features to match spatial dimensions
-        B = angles.shape[0]
+        B = azimuth.shape[0]
         angle_features = angle_features.view(B, -1, 1, 1).expand(-1, -1, original_size[0], original_size[1])
         
         # Process other inputs
@@ -790,12 +410,9 @@ class RelightingModel(nn.Module):
         
         # Concatenate all features including angle features
         x = torch.cat([x1_small, x1_large, x2_small, x2_large, x3, x4, angle_features], dim=1)
-
-        # Add dropout before encoder stages
+        
+        # Add dropout
         x = self.dropout(x)
-        e1 = self.encoder1(x)
-        e1 = self.dropout(e1)
-        e2 = self.encoder2(self.pool(e1))
         
         # Encoder
         e1 = self.encoder1(x)
@@ -837,199 +454,152 @@ class RelightingModel(nn.Module):
         }
         
         return out, intermediates
+
+class CombinedLoss(nn.Module):
+    def __init__(self, use_perceptual=True, input_channels=3):
+        super(CombinedLoss, self).__init__()
+        self.use_perceptual = use_perceptual
+        self.input_channels = input_channels
+        
+        # Basic losses
+        self.mse_loss = nn.MSELoss()
+        self.l1_loss = nn.L1Loss()
+        
+        # Initialize VGG for perceptual loss if needed
+        if self.use_perceptual:
+            vgg = models.vgg16(pretrained=True)
+            if input_channels != 3:
+                self.channel_adapt = nn.Conv2d(input_channels, 3, kernel_size=1)
+            else:
+                self.channel_adapt = nn.Identity()
+            
+            self.vgg_features = nn.Sequential(
+                *list(vgg.features)[:4]
+            ).eval()
+            
+            for param in self.vgg_features.parameters():
+                param.requires_grad = False
+            
+        # Pooling layers for reuse
+        self.avg_pool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
+        
+        # Sobel filters
+        self.register_buffer('sobel_x', torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], 
+                                                    dtype=torch.float32).view(1, 1, 3, 3))
+        self.register_buffer('sobel_y', torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], 
+                                                    dtype=torch.float32).view(1, 1, 3, 3))
+        
+    def normalize_vgg(self, x):
+        """Normalize input to VGG expected range"""
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(x.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(x.device)
+        return (x - mean) / std
     
-
-def visualize_output(model, val_loader, device):
-    # Get a random batch from the validation set
-    batch = next(iter(val_loader))
+    def compute_gradient_sobel(self, x):
+        """Compute gradients using Sobel filters"""
+        gradients = []
+        for c in range(x.shape[1]):
+            gx = F.conv2d(x[:, c:c+1], self.sobel_x, padding=1)
+            gy = F.conv2d(x[:, c:c+1], self.sobel_y, padding=1)
+            gradients.append(torch.sqrt(gx**2 + gy**2))
+        return torch.cat(gradients, dim=1)
     
-    # Select a random sample from the batch
-    idx = random.randint(0, batch['distances'].shape[0] - 1)
+    def compute_perceptual_loss(self, output, target):
+        """Compute perceptual loss using VGG features"""
+        if not self.use_perceptual:
+            return torch.tensor(0.0).to(output.device)
+            
+        output = self.channel_adapt(output)
+        target = self.channel_adapt(target)
+        
+        output = output.clamp(0, 1)
+        target = target.clamp(0, 1)
+        
+        output = self.normalize_vgg(output)
+        target = self.normalize_vgg(target)
+        
+        output_features = self.vgg_features(output)
+        target_features = self.vgg_features(target)
+        
+        return F.mse_loss(output_features, target_features)
     
-    distances = batch['distances'][idx:idx+1].to(device)
-    cosines = batch['cosines'][idx:idx+1].to(device)
-    albedo = batch['albedo'][idx:idx+1].to(device)
-    normals = batch['normals'][idx:idx+1].to(device)
-    azimuth = batch['azimuth'][idx:idx+1].to(device)
-    elevation = batch['elevation'][idx:idx+1].to(device)
-    target = batch['target'][idx:idx+1].to(device)
-
-    model.eval()
-    with torch.no_grad():
-        output, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
-
-    # Convert tensors to numpy arrays for plotting
-    output = output.cpu().numpy()[0]
-    target = target.cpu().numpy()[0]
-
-    # Create a figure with subplots
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-
-    # Plot the ground truth
-    ax1.imshow(target)
-    ax1.set_title('Ground Truth')
-    ax1.axis('off')
-
-    # Plot the model output
-    ax2.imshow(output)
-    ax2.set_title('Model Output')
-    ax2.axis('off')
-
-    # Plot the angular information
-    ax3.set_title(f'Light Direction\nAzimuth: {azimuth.item():.2f}\nElevation: {elevation.item():.2f}')
-    ax3.set_xlim(-1, 1)
-    ax3.set_ylim(-1, 1)
+    def compute_range_losses(self, output, target):
+        """Compute losses for different intensity ranges"""
+        losses = {}
+        
+        dark_mask = (target <= 0.2).float()
+        losses['dark'] = torch.mean((output * dark_mask - target * dark_mask) ** 2)
+        
+        mid_mask = ((target > 0.2) & (target < 0.8)).float()
+        losses['mid'] = torch.mean((output * mid_mask - target * mid_mask) ** 2)
+        
+        bright_mask = (target >= 0.8).float()
+        losses['bright'] = 2.0 * torch.mean((output * bright_mask - target * bright_mask) ** 2)
+        
+        large_diff_mask = (torch.abs(output - target) > 0.1).float()
+        losses['large_dev'] = 2.0 * torch.mean((output * large_diff_mask - target * large_diff_mask) ** 2)
+        
+        return losses
     
-    # Convert spherical to cartesian for visualization
-    x = np.cos(azimuth.item()) * np.sin(elevation.item())
-    y = np.sin(azimuth.item()) * np.sin(elevation.item())
-    z = np.cos(elevation.item())
-    
-    # Draw unit circle
-    circle = plt.Circle((0, 0), 1, fill=False, color='black')
-    ax3.add_artist(circle)
-    
-    # Plot light direction
-    ax3.arrow(0, 0, x, y, head_width=0.05, head_length=0.1, fc='r', ec='r')
-    ax3.grid(True)
-    ax3.set_aspect('equal')
+    def forward(self, output, target):
+        if output.dim() == 4 and output.shape[-1] == self.input_channels:
+            output = output.permute(0, 3, 1, 2)
+            target = target.permute(0, 3, 1, 2)
+        
+        losses = {}
+        
+        # Basic losses
+        losses['mse'] = self.mse_loss(output, target)
+        losses['l1'] = self.l1_loss(output, target)
+        
+        # Highlight-aware loss
+        bright_mask = (target > 0.7).float()
+        losses['highlight'] = F.mse_loss(output * bright_mask, target * bright_mask)
+        
+        # Gradient loss
+        output_grad = self.compute_gradient_sobel(output)
+        target_grad = self.compute_gradient_sobel(target)
+        losses['gradient'] = F.mse_loss(output_grad, target_grad)
+        
+        # Local contrast loss
+        output_mean = self.avg_pool(output)
+        target_mean = self.avg_pool(target)
+        output_contrast = output - output_mean
+        target_contrast = target - target_mean
+        losses['contrast'] = F.mse_loss(output_contrast, target_contrast)
+        
+        # Specular highlight loss
+        max_pooled = self.max_pool(target)
+        specular_mask = (target > 0.8 * max_pooled).float()
+        losses['specular'] = F.mse_loss(output * specular_mask, target * specular_mask)
+        
+        # Perceptual loss
+        if self.use_perceptual:
+            losses['perceptual'] = self.compute_perceptual_loss(output, target)
 
-    plt.tight_layout()
-    return fig
+        # Range-specific losses
+        range_losses = self.compute_range_losses(output, target)
+        losses.update(range_losses)
 
-def visualize_comparisons(model, val_loader, device, num_samples=10):
-    model.eval()
-    originals = []
-    reconstructed = []
-    angles = []
-    
-    with torch.no_grad():
-        for batch in val_loader:
-            distances = batch['distances'].to(device)
-            cosines = batch['cosines'].to(device)
-            albedo = batch['albedo'].to(device)
-            normals = batch['normals'].to(device)
-            azimuth = batch['azimuth'].to(device)
-            elevation = batch['elevation'].to(device)
-            targets = batch['target'].to(device)
-
-            outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
-
-            # Convert tensors to numpy arrays
-            originals.extend([img[:,:,::-1] for img in targets.cpu().numpy()])
-            reconstructed.extend([img[:,:,::-1] for img in outputs.cpu().numpy()])
-            angles.extend([(az.item(), el.item()) for az, el in zip(azimuth, elevation)])
-
-            if len(originals) >= num_samples:
-                break
-
-    # Trim to desired number of samples
-    originals = originals[:num_samples]
-    reconstructed = reconstructed[:num_samples]
-    angles = angles[:num_samples]
-
-    return originals, reconstructed, angles
-
-def save_comparison_images(model, val_loader, device, epoch, model_save_path, num_samples=10):
-    model.eval()
-    
-    with torch.no_grad():
-        for batch in val_loader:
-            distances = batch['distances'].to(device)
-            cosines = batch['cosines'].to(device)
-            albedo = batch['albedo'].to(device)
-            normals = batch['normals'].to(device)
-            azimuth = batch['azimuth'].to(device)
-            elevation = batch['elevation'].to(device)
-            targets = batch['target'].to(device)
-
-            outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
-
-            # Convert tensors to numpy arrays
-            originals = targets.cpu().numpy()
-            reconstructed = outputs.cpu().numpy()
-            azimuths = azimuth.cpu().numpy()
-            elevations = elevation.cpu().numpy()
-
-            # Calculate number of rows needed
-            num_rows = math.ceil(min(num_samples, originals.shape[0]) / 2)
-
-            # Create a single figure for all samples
-            fig, axes = plt.subplots(num_rows, 6, figsize=(30, 5*num_rows))
-            fig.suptitle(f'Comparison at Epoch {epoch}', fontsize=16)
-
-            for i in range(min(num_samples, originals.shape[0])):
-                row = i // 2
-                col = (i % 2) * 3
-
-                # Normalize and convert original image from BGR to RGB
-                original_img = originals[i]
-                original_img = (original_img - original_img.min()) / (original_img.max() - original_img.min())
-                original_img = original_img[..., ::-1]
-
-                # Normalize and convert reconstructed image from BGR to RGB
-                reconstructed_img = reconstructed[i]
-                reconstructed_img = (reconstructed_img - reconstructed_img.min()) / (reconstructed_img.max() - reconstructed_img.min())
-                reconstructed_img = reconstructed_img[..., ::-1]
-
-                # Plot original image
-                axes[row, col].imshow(original_img)
-                axes[row, col].set_title(f'Original {i+1}')
-                axes[row, col].axis('off')
-
-                # Plot reconstructed image
-                axes[row, col+1].imshow(reconstructed_img)
-                axes[row, col+1].set_title(f'Reconstructed {i+1}')
-                axes[row, col+1].axis('off')
-
-                # Plot light direction
-                az = azimuths[i]
-                el = elevations[i]
-                axes[row, col+2].set_title(f'Light Direction\nAz: {az:.2f}\nEl: {el:.2f}')
-                axes[row, col+2].set_xlim(-1, 1)
-                axes[row, col+2].set_ylim(-1, 1)
-                
-                # Convert spherical to cartesian
-                x = np.cos(az) * np.sin(el)
-                y = np.sin(az) * np.sin(el)
-                z = np.cos(el)
-                
-                # Draw unit circle
-                circle = plt.Circle((0, 0), 1, fill=False, color='black')
-                axes[row, col+2].add_artist(circle)
-                
-                # Plot light direction arrow
-                axes[row, col+2].arrow(0, 0, x, y, head_width=0.05, head_length=0.1, fc='r', ec='r')
-                axes[row, col+2].grid(True)
-                axes[row, col+2].set_aspect('equal')
-
-            # Remove any unused subplots
-            for i in range(min(num_samples, originals.shape[0]), num_rows*2):
-                row = i // 2
-                col = (i % 2) * 3
-                for j in range(3):
-                    axes[row, col+j].axis('off')
-
-            plt.tight_layout()
-            plt.savefig(os.path.join(model_save_path, f'comparison_epoch_{epoch}.png'), 
-                       dpi=300, bbox_inches='tight')
-            plt.close(fig)
-
-            break  # Only process one batch
-
-def plot_losses(train_losses, val_losses, epoch, model_save_path):
-    plt.figure(figsize=(10, 5))
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Validation Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title(f'Training and Validation Losses up to Epoch {epoch}')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch}.png'), 
-                dpi=300, bbox_inches='tight')
-    plt.close()
+        # Total loss
+        total_loss = (
+            params.LAMBDA_MSE * losses['mse'] +
+            params.LAMBDA_L1 * losses['l1'] +
+            params.LAMBDA_HIGHLIGHT * losses['highlight'] +
+            params.LAMBDA_GRADIENT * losses['gradient'] +
+            params.LAMBDA_CONTRAST * losses['contrast'] +
+            params.LAMBDA_SPECULAR * losses['specular'] +
+            params.LAMBDA_DARK * losses['dark'] +
+            params.LAMBDA_MID * losses['mid'] +
+            params.LAMBDA_BRIGHT * losses['bright'] +
+            params.LAMBDA_LARGE_DEV * losses['large_dev']
+        )
+        
+        if self.use_perceptual:
+            total_loss += params.LAMBDA_PERCEPTUAL * losses['perceptual']
+        
+        return total_loss, losses
 
 def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path='.'):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1042,23 +612,21 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     criterion = CombinedLoss(use_perceptual=True, input_channels=3).to(device)
     
+    # Initialize optimizer and scheduler based on params
     optimizer = None
     scheduler = None
     if params.OPTIMIZER == "Adam":
-        # Option 1: Adam with gradient clipping and cyclic learning rate
         optimizer = optim.Adam(
             model.parameters(),
             lr=params.LEARNING_RATE,
-            betas=(0.9, 0.999),
-            eps=1e-8,
             weight_decay=params.WEIGHT_DECAY
         )
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        scheduler = optim.lr_scheduler.CyclicLR(
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            base_lr=params.LEARNING_RATE / 10,
-            max_lr=params.LEARNING_RATE,
-            cycle_momentum=False
+            mode='min',
+            factor=0.5,
+            patience=3,
+            verbose=True
         )
 
     elif params.OPTIMIZER == "AdamW":
@@ -1152,7 +720,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
             three_phase=True,  # Use three-phase learning rate schedule
             anneal_strategy='cos'  # Cosine annealing
         )
-
+    
     train_losses = []
     val_losses = []
 
@@ -1167,18 +735,17 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
             albedo = batch['albedo'].to(device)
             normals = batch['normals'].to(device)
             azimuth = batch['azimuth'].to(device)
-            elevation = batch['elevation'].to(device)
             targets = batch['target'].to(device)
 
+            # Check for NaN values
             if (torch.isnan(distances).any() or torch.isnan(cosines).any() or 
                 torch.isnan(albedo).any() or torch.isnan(normals).any() or 
-                torch.isnan(targets).any() or torch.isnan(azimuth).any() or
-                torch.isnan(elevation).any()):
+                torch.isnan(targets).any() or torch.isnan(azimuth).any()):
                 print(f"Warning: NaN detected in input batch {batch_idx}")
                 continue
 
             optimizer.zero_grad()
-            outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
+            outputs, _ = model(distances, cosines, albedo, normals, azimuth)
             tot_loss, losses = criterion(outputs, targets)
             tot_loss.backward()
             optimizer.step()
@@ -1194,37 +761,119 @@ def train_model(model, train_loader, val_loader, num_epochs=100, model_save_path
                 albedo = batch['albedo'].to(device)
                 normals = batch['normals'].to(device)
                 azimuth = batch['azimuth'].to(device)
-                elevation = batch['elevation'].to(device)
                 targets = batch['target'].to(device)
 
-                outputs, _ = model(distances, cosines, albedo, normals, azimuth, elevation)
+                outputs, _ = model(distances, cosines, albedo, normals, azimuth)
                 loss, _ = criterion(outputs, targets)
                 val_loss += loss.item()
 
+        # Calculate average losses
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         
-        model.val_losses = val_losses
-        
         print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         
+        # Save visualizations and model
         if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
             save_comparison_images(model, val_loader, device, epoch + 1, model_save_path)
             plot_losses(train_losses, val_losses, epoch + 1, model_save_path)
+            torch.save(model.state_dict(), 
+                      os.path.join(model_save_path, f'relighting_model_epoch_{epoch+1}.pth'))
 
         scheduler.step(val_loss)
 
-        if (epoch + 1) % params.RTI_NET_SAVE_MODEL_EVERY_N_EPOCHS == 0:
-            save_path = os.path.join(model_save_path, f'relighting_model_epoch_{epoch+1}.pth')
-            torch.save(model.state_dict(), save_path)
-            print(f"Model saved at epoch {epoch+1}")
-
     return model
 
-def prepare_data(distances, cosines, albedo, normals, azimuths, elevations, targets):
+def save_comparison_images(model, val_loader, device, epoch, model_save_path, num_samples=8):
+    model.eval()
+    
+    with torch.no_grad():
+        # Get a batch of data
+        batch = next(iter(val_loader))
+        
+        # Sort batch by azimuth to get diverse lighting conditions
+        azimuths = batch['azimuth']
+        sorted_indices = torch.argsort(azimuths)
+        
+        # Take evenly spaced samples to get diverse lighting directions
+        step = len(sorted_indices) // num_samples
+        selected_indices = sorted_indices[::step][:num_samples]
+        
+        # Select the data using these indices
+        distances = batch['distances'][selected_indices].to(device)
+        cosines = batch['cosines'][selected_indices].to(device)
+        albedo = batch['albedo'][selected_indices].to(device)
+        normals = batch['normals'][selected_indices].to(device)
+        azimuth = batch['azimuth'][selected_indices].to(device)
+        targets = batch['target'][selected_indices].to(device)
+        
+        # Get model outputs
+        outputs, _ = model(distances, cosines, albedo, normals, azimuth)
+        
+        # Convert tensors to numpy arrays
+        originals = targets.cpu().numpy()
+        reconstructed = outputs.cpu().numpy()
+        azimuths = azimuth.cpu().numpy()
+        
+        # Calculate number of rows needed (num_samples / 2 rounded up)
+        num_rows = (num_samples + 1) // 2
+        
+        # Create figure with 2 comparisons (4 images) per row
+        fig, axes = plt.subplots(num_rows, 4, figsize=(20, 4*num_rows))
+        fig.suptitle(f'Different Lighting Directions at Epoch {epoch}', fontsize=16)
+        
+        for i in range(num_samples):
+            row = i // 2  # Integer division to get row index
+            col = (i % 2) * 2  # Multiply by 2 because each comparison takes 2 columns
+            
+            # Normalize and convert original image
+            original_img = originals[i]
+            original_img = (original_img - original_img.min()) / (original_img.max() - original_img.min())
+            original_img = original_img[..., ::-1]  # BGR to RGB
+            
+            # Normalize and convert reconstructed image
+            reconstructed_img = reconstructed[i]
+            reconstructed_img = (reconstructed_img - reconstructed_img.min()) / (reconstructed_img.max() - reconstructed_img.min())
+            reconstructed_img = reconstructed_img[..., ::-1]  # BGR to RGB
+            
+            # Plot original image
+            axes[row, col].imshow(original_img)
+            axes[row, col].set_title(f'Original (Az: {azimuths[i]:.2f})')
+            axes[row, col].axis('off')
+            
+            # Plot reconstructed image
+            axes[row, col + 1].imshow(reconstructed_img)
+            axes[row, col + 1].set_title(f'Reconstructed (Az: {azimuths[i]:.2f})')
+            axes[row, col + 1].axis('off')
+            
+        # Hide any empty subplots in the last row if num_samples is odd
+        if num_samples % 2 == 1:
+            axes[-1, -2].axis('off')
+            axes[-1, -1].axis('off')
+            
+        plt.tight_layout()
+        plt.savefig(os.path.join(model_save_path, f'comparison_epoch_{epoch}.png'),
+                    dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+def plot_losses(train_losses, val_losses, epoch, model_save_path):
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'Training and Validation Losses up to Epoch {epoch}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_save_path, f'loss_plot_epoch_{epoch}.png'), 
+                dpi=300, bbox_inches='tight')
+    plt.close()
+
+def prepare_data(distances, cosines, albedo, normals, azimuths, targets):
     # Splitting the data
     K = distances.shape[0]
     N = distances.shape[1]
@@ -1236,8 +885,6 @@ def prepare_data(distances, cosines, albedo, normals, azimuths, elevations, targ
     val_targets = []
     train_azimuths = []
     val_azimuths = []
-    train_elevations = []
-    val_elevations = []
 
     for i in range(K):
         train_indices, val_indices = train_test_split(
@@ -1253,8 +900,6 @@ def prepare_data(distances, cosines, albedo, normals, azimuths, elevations, targ
         val_targets.append(targets[i, val_indices, :, :, :])
         train_azimuths.append(azimuths[i, train_indices])
         val_azimuths.append(azimuths[i, val_indices])
-        train_elevations.append(elevations[i, train_indices])
-        val_elevations.append(elevations[i, val_indices])
 
     print("Train distances shape: ", np.array(train_distances).shape,
           "\nVal distances shape: ", np.array(val_distances).shape,
@@ -1269,14 +914,12 @@ def prepare_data(distances, cosines, albedo, normals, azimuths, elevations, targ
     train_dataset = PatchRelightingDataset(
         train_distances, train_cosines,
         albedo, normals,
-        train_azimuths, train_elevations,
-        train_targets
+        train_azimuths, train_targets
     )
     val_dataset = PatchRelightingDataset(
         val_distances, val_cosines,
         albedo, normals,
-        val_azimuths, val_elevations,
-        val_targets
+        val_azimuths, val_targets
     )
 
     # Create data loaders
@@ -1298,36 +941,27 @@ def prepare_data(distances, cosines, albedo, normals, azimuths, elevations, targ
     return train_loader, val_loader, train_indices, val_indices
 
 def create_numbered_folder(base_path):
-    # Get current date and time
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Find existing folders that match the pattern
     base_name = "saved_models"
     existing_folders = [d for d in os.listdir(os.path.dirname(base_path)) 
                        if os.path.isdir(os.path.join(os.path.dirname(base_path), d)) 
                        and d.startswith(base_name)]
     
-    # Find the next available number
     max_num = -1
     for folder in existing_folders:
         try:
-            num = int(folder.split('_')[2])  # Assuming format: saved_models_XX_date_time
+            num = int(folder.split('_')[2])
             max_num = max(max_num, num)
         except (IndexError, ValueError):
             continue
     
-    # Create new folder name with next number
-    new_num = str(max_num + 1).zfill(2)  # Pad with zeros to get XX format
+    new_num = str(max_num + 1).zfill(2)
     folder_name = f"{base_name}_{new_num}_{current_time}"
-    
-    # Create full path
     full_path = os.path.join(os.path.dirname(base_path), folder_name)
     os.makedirs(full_path, exist_ok=True)
-
     return full_path
 
-
-def train(distances, cosines, albedo, normals, azimuths, elevations, targets):
+def train(distances, cosines, albedo, normals, azimuths, targets):
     print("Going to train..")    
     
     # Convert inputs to numpy arrays
@@ -1336,7 +970,6 @@ def train(distances, cosines, albedo, normals, azimuths, elevations, targets):
     albedo = np.array(albedo)
     normals = np.array(normals)
     azimuths = np.array(azimuths)
-    elevations = np.array(elevations)
     targets = np.array(targets)
 
     print("Input shapes:",
@@ -1345,7 +978,6 @@ def train(distances, cosines, albedo, normals, azimuths, elevations, targets):
           "\nalbedo:", albedo.shape,
           "\nnormals:", normals.shape,
           "\nazimuths:", azimuths.shape,
-          "\nelevations:", elevations.shape,
           "\ntargets:", targets.shape)
     
     model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models", "saved_model")
@@ -1355,7 +987,7 @@ def train(distances, cosines, albedo, normals, azimuths, elevations, targets):
     # Prepare data
     print("Preparing data..")
     train_loader, val_loader, train_indices, val_indices = prepare_data(
-        distances, cosines, albedo, normals, azimuths, elevations, targets
+        distances, cosines, albedo, normals, azimuths, targets
     )
 
     np.save(os.path.join(model_save_path, 'train_indices.npy'), train_indices)

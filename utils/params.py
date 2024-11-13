@@ -10,7 +10,7 @@
 #              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_5/images/Face_A/rti'
 #             ]
 
-ACQ_PATHS = [r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG']
+ACQ_PATHS = [r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG']
              
              
             
@@ -44,26 +44,31 @@ RTI_MAX_NUMBER_PATCHES = 128 # Randomly choose desired number of patches from th
 RTI_MODEL_PATH = r'/work/imvia/ra7916lu/illumi-net/saved_models/saved_models_05_20241107_101119/relighting_model_epoch_70.pth'
 
 # Goal
-TRAINING = False # Training: True, Relighting: False. If you choose relighting- ensure the path contains - 1. distances.npy, 2. cosines.npy, 3. albedo and 4. normals
+TRAINING = True # Training: True, Relighting: False. If you choose relighting- ensure the path contains - 1. distances.npy, 2. cosines.npy, 3. albedo and 4. normals
 
 
 # Model Params
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 TRAIN_SHUFFLE = True
 VAL_SHUFFLE = False
 NUM_WORKERS = 4
-LEARNING_RATE = 0.004350993974990181
-LAMBDA_MSE = 0.7795360545159451
-LAMBDA_L1 = 0.05990896915859256
-LAMBDA_HIGHLIGHT = 0.49683682111363736
-LAMBDA_GRADIENT = 0.951901687643493
-LAMBDA_SPECULAR = 0.5553407944374484
-LAMBDA_CONTRAST = 0.419660423293034
-LAMBDA_PERCEPTUAL = 0.981867372344581
-LAMBDA_DARK = 0.15142169487269186        # Weight for dark region accuracy
-LAMBDA_MID = 0.744118013163035         # Weight for mid-tone accuracy
-LAMBDA_BRIGHT =  0.024872487168908997      # Weight for highlight accuracy
-LAMBDA_LARGE_DEV = 0.3758014812286691   # Weight for large deviation penalty
+BATCH_SIZE = 16
+TRAIN_SHUFFLE = True
+VAL_SHUFFLE = False
+NUM_WORKERS = 4
+LEARNING_RATE = 0.001
+LAMBDA_MSE = 1.697571586526807
+LAMBDA_L1 = 0.8
+LAMBDA_HIGHLIGHT = 0.0
+LAMBDA_GRADIENT = 0.0
+LAMBDA_SPECULAR = 1.0045861973846846
+LAMBDA_CONTRAST = 0.480192360982806
+LAMBDA_PERCEPTUAL = 0.744375850604896994
+LAMBDA_DARK = 1.0       # Weight for dark region accuracy
+LAMBDA_MID = 0.0         # Weight for mid-tone accuracy
+LAMBDA_BRIGHT =  0.0      # Weight for highlight accuracy
+LAMBDA_LARGE_DEV = 0.0   # Weight for large deviation penalty
+
 PERSISTENT_WORKER =True,
 PIN_MEMORY =True,
 PREFETCH_FACTOR=3
@@ -73,8 +78,8 @@ NON_BLACK_PIX_RATIO_MIN = 0.5
 RTI_MAX_IMAGES_PER_CHUNK = 40  # Maximum number of images to process at once. For relighting
 TRAIN_VAL_SPLIT = 0.2
 
-OPTIMIZER = "RAdam"
-WEIGHT_DECAY = 0.003407536034718477
+OPTIMIZER = "Adam"
+WEIGHT_DECAY = 0.004136741236796869
 
 # Visualizations
 SAMPLE_NUMBER_OF_COMPARISONS = 8
