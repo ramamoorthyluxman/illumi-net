@@ -52,7 +52,7 @@ def main():
                        albedo=data_.surface_albedos,
                        normals=data_.surface_normals,
                        azimuths = data_.azimuths,
-                       output_dir='/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/reconstructed/')
+                       output_dir='/work/imvia/ra7916lu/illumi-net/data/subset/2024_02_22_1_3/images/Face_A/rti_sub_images/reconstructed')
 
 if __name__ == "__main__":
     main()

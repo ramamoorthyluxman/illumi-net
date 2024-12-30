@@ -490,6 +490,12 @@ class CombinedLoss(nn.Module):
         self.register_buffer('sobel_y', torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], 
                                                     dtype=torch.float32).view(1, 1, 3, 3))
         
+    def compute_intensity_loss(self, output, target):
+        """Compute intensity matching loss"""
+        output_intensity = torch.mean(output, dim=[2, 3])  # Global average pooling
+        target_intensity = torch.mean(target, dim=[2, 3])
+        return F.mse_loss(output_intensity, target_intensity)
+        
     def normalize_vgg(self, x):
         """Normalize input to VGG expected range"""
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(x.device)
@@ -548,6 +554,9 @@ class CombinedLoss(nn.Module):
             target = target.permute(0, 3, 1, 2)
         
         losses = {}
+
+        # Add intensity matching loss
+        losses['intensity'] = self.compute_intensity_loss(output, target)
         
         # Basic losses
         losses['mse'] = self.mse_loss(output, target)
@@ -593,7 +602,8 @@ class CombinedLoss(nn.Module):
             params.LAMBDA_DARK * losses['dark'] +
             params.LAMBDA_MID * losses['mid'] +
             params.LAMBDA_BRIGHT * losses['bright'] +
-            params.LAMBDA_LARGE_DEV * losses['large_dev']
+            params.LAMBDA_LARGE_DEV * losses['large_dev'] +
+            5.0 * losses['intensity']  # Add high weight for intensity matching
         )
         
         if self.use_perceptual:
@@ -980,7 +990,7 @@ def train(distances, cosines, albedo, normals, azimuths, targets):
           "\nazimuths:", azimuths.shape,
           "\ntargets:", targets.shape)
     
-    model_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models", "saved_model")
+    model_save_path = params.RTI_MODEL_SAVE_DIR
     model_save_path = create_numbered_folder(model_save_path)
     shutil.copy2('./utils/params.py', model_save_path)
 

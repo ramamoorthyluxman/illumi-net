@@ -2,6 +2,40 @@ import cv2
 import numpy as np
 import os
 
+def apply_mask_to_images(folder_path, mask_path):
+    valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif')
+
+    # List all files and filter for images
+    image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(valid_extensions)]
+
+    # Read mask
+    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise FileNotFoundError(f"Could not read mask at {mask_path}")
+    
+    # Normalize mask to range [0, 1]
+    mask = mask.astype(float) / 255.0
+
+    for image_file in image_files:
+        image_path = os.path.join(folder_path, image_file)
+        # Read image
+        image = cv2.imread(image_path)
+        if image is None:
+            print(f"Warning: Could not read image: {image_path}")
+            continue
+        
+        mask_resized = mask
+        
+        # Apply mask
+        # Expand mask to 3 channels to match image
+        mask_3channel = np.stack([mask_resized] * 3, axis=2)
+        masked_image = (image * mask_3channel).astype(np.uint8)
+        
+        # Save masked image
+        cv2.imwrite(image_path, masked_image)
+
+
+
 def process_lp_and_apply_mask(folder_path, mask_path, output_folder=None):
     """
     Detect .lp file in the given folder, read it, and apply the given mask to images.
@@ -226,4 +260,6 @@ def convert_normal_map_to_npy(png_path):
 
 # convert_normal_map_to_npy(r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/normal_map.png')
 
-process_lp_and_apply_mask(r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG', r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG/mask.png', output_folder=None)
+# process_lp_and_apply_mask(r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG', r'/work/imvia/ra7916lu/illumi-net/data/subset/readingPNG/mask.png', output_folder=None)
+
+apply_mask_to_images(r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/reconstructed/acquisition_0', r'/work/imvia/ra7916lu/illumi-net/data/subset/buddhaPNG/mask.png')

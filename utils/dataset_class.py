@@ -113,7 +113,7 @@ class dataset:
     
     def load_lps_and_img_paths(self):
         print("Loading LP files and image paths...")
-        for lp_file in self.lp_files:
+        for i, lp_file in enumerate(self.lp_files):
             with open(lp_file, 'r') as f:
                 lines = f.readlines()
                 lps_cartesian = []
@@ -142,7 +142,8 @@ class dataset:
             self.lps_cartesian.append(lps_cartesian)
             self.lps_spherical.append(lps_spherical) 
             self.image_paths.append(img_paths) 
-            np.save(os.path.join(os.path.dirname(self.image_paths[0][0]), "azimuths.npy"), azimuths)
+            print("Saving azimuths to, " + self.image_paths[i][0] + "azimuths.npy")
+            np.save(os.path.join(os.path.dirname(self.image_paths[i][0]), "azimuths.npy"), azimuths)
 
 
     def computed_normals_and_albedos(self):
@@ -197,10 +198,12 @@ class dataset:
                 
                 distance_matrices.append(distances)
                 angles_matrices.append(angles)
-        
-            np.save(os.path.join(os.path.dirname(self.image_paths[i][0]), "distance_matrices.npy"), np.array(distance_matrices))
-            np.save(os.path.join(os.path.dirname(self.image_paths[i][0]), "angles_matrices.npy"), np.array(angles_matrices))
-
+            if params.COLLIMATED_LIGHT:
+                np.save(os.path.join(os.path.dirname(self.image_paths[i][0]), "distance_matrices_collimated.npy"), np.array(distance_matrices))
+                np.save(os.path.join(os.path.dirname(self.image_paths[i][0]), "angles_matrices_collimated.npy"), np.array(angles_matrices))
+            else:
+                np.save(os.path.join(os.path.dirname(self.image_paths[i][0]), "distance_matrices_non_collimated.npy"), np.array(distance_matrices))
+                np.save(os.path.join(os.path.dirname(self.image_paths[i][0]), "angles_matrices_non_collimated.npy"), np.array(angles_matrices))
 
     def load_surface_normals(self):
         for acq in self.acqs:
@@ -218,18 +221,25 @@ class dataset:
 
     def load_distance_matrices(self):
         for i in tqdm(range(len(self.acqs)), desc="Loading acquisitions", unit="acq"):
-            acq_distance_matrices = np.load(os.path.join(self.acqs[i], "distance_matrices.npy"))
+            acq_distance_matrices = None
+            if params.COLLIMATED_LIGHT:
+                acq_distance_matrices = np.load(os.path.join(self.acqs[i], "distance_matrices_collimated.npy"))
+            else:
+                acq_distance_matrices = np.load(os.path.join(self.acqs[i], "distance_matrices_non_collimated.npy"))
             if len(self.rand_indices)==0:
                 for i in range(len(self.acqs)):
                     # self.rand_indices.append(random.sample(range(acq_distance_matrices.shape[0]), min(acq_distance_matrices.shape[0], params.MAX_NB_IMAGES_PER_ACQ)))
-                    self.rand_indices.append(list(range(0, len(self.lps_cartesian[i]))))
+                    self.rand_indices.append(list(range(0, acq_distance_matrices.shape[0])))
             self.distance_matrices.append(acq_distance_matrices[self.rand_indices[i]])
         self.distance_matrices = np.array(self.distance_matrices)
             
     def load_cosine_matrices(self):
         for i in tqdm(range(len(self.acqs)), desc="Loading acquisitions", unit="acq"):
-
-            acq_cosine_matrices = np.load(os.path.join(self.acqs[i], "angles_matrices.npy"))
+            acq_cosine_matrices = None
+            if params.COLLIMATED_LIGHT:
+                acq_cosine_matrices = np.load(os.path.join(self.acqs[i], "angles_matrices_collimated.npy"))
+            else:
+                acq_cosine_matrices = np.load(os.path.join(self.acqs[i], "angles_matrices_non_collimated.npy"))
             azimuths = np.load(os.path.join(self.acqs[i], "azimuths.npy"))
             self.azimuths.append(azimuths[self.rand_indices[i]])
             self.cosine_matrices.append(acq_cosine_matrices[self.rand_indices[i]])
